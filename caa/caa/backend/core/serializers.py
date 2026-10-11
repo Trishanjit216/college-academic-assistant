@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import (Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab,
@@ -17,20 +18,32 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ["role"]
 
 
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
+class SignupSerializer(serializers.Serializer):
+    """Validates the sign-up form. Nothing is saved here: the account is only created after the
+    emailed code is verified (see views.VerifyOtpView)."""
+    name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    first_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    email = serializers.EmailField(max_length=150)
+    password = serializers.CharField(write_only=True, max_length=128, trim_whitespace=False)
+    roll_no = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    group = serializers.PrimaryKeyRelatedField(queryset=Group.objects.all(), required=False, allow_null=True)
 
-    class Meta:
-        model = User
-        fields = ["username", "password", "first_name", "last_name", "email", "roll_no", "group"]
+    def validate_email(self, value):
+        return value.strip().lower()
 
-    def validate_password(self, value):
-        validate_password(value)
-        return value
-
-    def create(self, data):
-        # Public sign-up can only ever create students.
-        return User.objects.create_user(role=User.STUDENT, **data)
+    def validate(self, data):
+        full = (data.get("name") or "").strip() or f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+        if not full:
+            raise serializers.ValidationError({"name": "Enter your name."})
+        first, _, last = full.partition(" ")
+        data["first_name"], data["last_name"] = first[:100], last.strip()[:100]
+        probe = User(username=data["email"], email=data["email"], first_name=first, last_name=last)
+        try:
+            validate_password(data["password"], user=probe)
+        except DjangoValidationError as e:
+            raise serializers.ValidationError({"password": list(e.messages)})
+        return data
 
 
 class GroupSerializer(serializers.ModelSerializer):

@@ -301,3 +301,9 @@ details.more summary { cursor: pointer; font-weight: 600; font-size: .875rem; co
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
 }
+
+/* Email verification (sign-up) */
+.form-info { padding: var(--s3); border-radius: var(--r-md); background: var(--primary-soft, var(--surface-2)); color: var(--primary-text); font-size: .875rem; margin-bottom: var(--s4); }
+.otp-input { text-align: center; font-size: 1.5rem; letter-spacing: .5em; font-variant-numeric: tabular-nums; padding-left: .5em; }
+.otp-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s2); }
+.link-btn:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }

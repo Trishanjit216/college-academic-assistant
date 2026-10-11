@@ -6,6 +6,7 @@
 import os
 from datetime import timedelta
 
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
@@ -16,6 +17,8 @@ class Command(BaseCommand):
     help = "Seed demo data"
 
     def handle(self, *args, **opts):
+        # Pending OTP sign-ups are stored in a DB cache table; this is a no-op if it already exists.
+        call_command("createcachetable", verbosity=0)
         self.make_admin()
         if os.environ.get("SEED_DEMO_DATA", "1") == "1":
             self.make_demo_content()

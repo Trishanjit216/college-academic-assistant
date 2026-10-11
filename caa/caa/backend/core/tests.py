@@ -1,6 +1,9 @@
 from datetime import timedelta
+from unittest import mock
 
+from django.core.cache import caches
 from django.core.management import call_command
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
@@ -13,11 +16,6 @@ class AuthAndPermissionTests(APITestCase):
         self.student = User.objects.create_user("stu", password="pw-12345-x", role="student")
         self.faculty = User.objects.create_user("fac", password="pw-12345-x", role="faculty")
         self.subject = Subject.objects.create(code="X1", name="Maths")
-
-    def test_register_is_always_student(self):
-        r = self.client.post("/api/auth/register/", {"username": "n", "password": "Str0ng-pass-99", "role": "admin"})
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(User.objects.get(username="n").role, "student")
 
     def test_student_cannot_write_official_data_but_faculty_can(self):
         self.client.force_authenticate(self.student)
@@ -102,3 +100,87 @@ class CronEndpointTests(APITestCase):
         self.assertEqual(self.client.post("/api/cron/send-reminders/").status_code, 403)
         r = self.client.post("/api/cron/send-reminders/", HTTP_X_CRON_SECRET="s3cret")
         self.assertEqual(r.status_code, 200)
+
+
+LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+          "otp": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": "otp-test"}}
+
+
+@override_settings(CACHES=LOCMEM, BREVO_API_KEY="k", EMAIL_FROM="a@b.c")
+class SignupOtpTests(APITestCase):
+    """Email-OTP sign-up. Email sending is mocked; real delivery needs a Brevo key."""
+    def setUp(self):
+        caches["otp"].clear()
+        self.sent = []
+        p = mock.patch("core.views.send_via_brevo", side_effect=lambda *a, **k: self.sent.append(a[4:6]))
+        p.start(); self.addCleanup(p.stop)
+
+    def signup(self, email="new@x.com", **kw):
+        d = {"name": "Asha Rao", "email": email, "password": "Str0ng-pass-99"}; d.update(kw)
+        return self.client.post("/api/auth/register/", d)
+
+    def code(self):
+        return self.sent[-1][1]
+
+    def test_signup_creates_no_user_until_verified(self):
+        r = self.signup()
+        self.assertEqual(r.status_code, 202)
+        self.assertFalse(User.objects.filter(email="new@x.com").exists())
+        self.assertNotIn("otp", r.data)
+        self.assertNotIn(self.code(), str(r.data))
+        login = self.client.post("/api/auth/token/", {"username": "new@x.com", "password": "Str0ng-pass-99"})
+        self.assertEqual(login.status_code, 401)
+
+    def test_verify_creates_active_student_and_login_works(self):
+        self.signup(role="admin")
+        r = self.client.post("/api/auth/verify-otp/", {"email": "new@x.com", "otp": self.code()})
+        self.assertEqual(r.status_code, 201)
+        u = User.objects.get(email="new@x.com")
+        self.assertEqual(u.role, "student"); self.assertEqual(u.first_name, "Asha")
+        self.assertEqual(self.client.post("/api/auth/token/", {"username": "new@x.com", "password": "Str0ng-pass-99"}).status_code, 200)
+        self.assertEqual(self.client.post("/api/auth/token/", {"username": "NEW@x.com", "password": "Str0ng-pass-99"}).status_code, 200)
+
+    def test_wrong_code_then_lockout(self):
+        self.signup()
+        good = self.code(); bad = "000000" if good != "000000" else "111111"
+        for _ in range(4):
+            self.assertEqual(self.client.post("/api/auth/verify-otp/", {"email": "new@x.com", "otp": bad}).data["code"], "invalid")
+        self.assertEqual(self.client.post("/api/auth/verify-otp/", {"email": "new@x.com", "otp": bad}).status_code, 429)
+        self.assertFalse(User.objects.filter(email="new@x.com").exists())
+
+    def test_expired_code(self):
+        self.signup()
+        with mock.patch("core.views.time.time", return_value=__import__("time").time() + 700):
+            r = self.client.post("/api/auth/verify-otp/", {"email": "new@x.com", "otp": self.code()})
+        self.assertEqual(r.data["code"], "expired")
+
+    def test_resend_cooldown_then_new_code(self):
+        self.signup()
+        r = self.client.post("/api/auth/resend-otp/", {"email": "new@x.com"})
+        self.assertEqual(r.status_code, 429); self.assertEqual(r.data["code"], "cooldown"); self.assertGreater(r.data["retry_after"], 0)
+        with mock.patch("core.views.time.time", return_value=__import__("time").time() + 61):
+            self.assertEqual(self.client.post("/api/auth/resend-otp/", {"email": "new@x.com"}).status_code, 200)
+        self.assertEqual(len(self.sent), 2)
+
+    def test_duplicate_email_blocked(self):
+        User.objects.create_user("old", email="Taken@x.com", password="pw-12345-x")
+        r = self.signup("taken@x.com")
+        self.assertEqual(r.status_code, 409); self.assertEqual(self.sent, [])
+
+    def test_email_failure_returns_503_and_no_state(self):
+        from .emailer import EmailDeliveryError
+        with mock.patch("core.views.send_via_brevo", side_effect=EmailDeliveryError("down")):
+            self.assertEqual(self.signup().status_code, 503)
+        self.assertEqual(self.client.post("/api/auth/resend-otp/", {"email": "new@x.com"}).data["code"], "not_found")
+
+    def test_weak_password_and_missing_name_rejected(self):
+        self.assertEqual(self.signup(password="12345678").status_code, 400)
+        self.assertEqual(self.signup(name="").status_code, 400)
+
+    def test_protected_api_needs_login(self):
+        self.signup()
+        self.assertEqual(self.client.get("/api/records/").status_code, 401)
+
+    def test_legacy_username_login_still_works(self):
+        User.objects.create_user("legacy", password="pw-12345-x")
+        self.assertEqual(self.client.post("/api/auth/token/", {"username": "legacy", "password": "pw-12345-x"}).status_code, 200)

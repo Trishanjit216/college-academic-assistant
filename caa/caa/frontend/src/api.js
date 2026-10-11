@@ -33,7 +33,9 @@ export async function api(path, { method = "GET", body, auth = true } = {}, retr
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const msg = data?.detail || (data && Object.entries(data).map(([k, v]) => `${k}: ${[].concat(v).join(" ")}`).join("; ")) || `Error ${res.status}`;
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status; err.code = data?.code; err.retryAfter = data?.retry_after;
+    throw err;
   }
   return data;
 }

@@ -1,8 +1,14 @@
 import hmac
+import math
 import os
+import time
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
+from django.core.cache import caches
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import filters, generics, status, viewsets
@@ -10,24 +16,145 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from . import serializers as s
 from .models import (Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
                      FormGuide, Group, Lab, Notification, Post, Report, Subject)
+from . import otp
+from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import IsModerator, ReadAllEditorsWrite
 
 User = get_user_model()
 
 
+class EmailOrUsernameTokenSerializer(TokenObtainPairSerializer):
+    """New accounts log in with their email; older accounts can keep using their username."""
+    def validate(self, attrs):
+        ident = (attrs.get("username") or "").strip()
+        if "@" in ident:
+            match = User.objects.filter(email__iexact=ident).order_by("id").first()
+            if match:
+                attrs["username"] = match.get_username()
+        return super().validate(attrs)
+
+
 class ThrottledTokenView(TokenObtainPairView):
+    serializer_class = EmailOrUsernameTokenSerializer
     throttle_scope = "auth"
 
 
-class RegisterView(generics.CreateAPIView):
-    serializer_class = s.RegisterSerializer
+# ---------- email-OTP sign-up ----------
+def _otp_store():
+    return caches["otp"]
+
+
+def _send_code(email, code):
+    send_via_brevo(settings.BREVO_API_KEY, settings.EMAIL_FROM, settings.EMAIL_FROM_NAME, email, code,
+                   ttl_minutes=otp.OTP_TTL // 60)
+
+
+def _otp_error(e):
+    body = {"detail": e.message, "code": e.code}
+    resp = Response(body, status=e.status)
+    if e.retry_after:
+        body["retry_after"] = e.retry_after
+        resp["Retry-After"] = str(e.retry_after)
+    return resp
+
+
+def _email_unavailable(e):
+    return Response({"detail": str(e), "code": "email_unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+def _clean_email(raw):
+    return (raw or "").strip().lower()[:150]
+
+
+def _email_taken(email):
+    return User.objects.filter(Q(email__iexact=email) | Q(username__iexact=email)).exists()
+
+
+class _OtpView(APIView):
     permission_classes = [AllowAny]
-    throttle_scope = "auth"
+    authentication_classes = []        # ignore any stale Authorization header on these public endpoints
+    throttle_scope = "otp"
+
+
+class SignupView(_OtpView):
+    """POST /api/auth/register/  — validates the form and emails a code. Creates NO account yet."""
+    def post(self, request):
+        ser = s.SignupSerializer(data=request.data)
+        if not ser.is_valid():
+            msgs = []
+            for field, errs in ser.errors.items():
+                for m in ([errs] if isinstance(errs, str) else errs):
+                    msgs.append(str(m))
+            return Response({"detail": " ".join(msgs) or "Please check the form.", "code": "invalid_input",
+                             "errors": ser.errors}, status=status.HTTP_400_BAD_REQUEST)
+        d = ser.validated_data
+        email = d["email"]
+        if _email_taken(email):
+            return Response({"detail": "An account with this email already exists. Log in instead.",
+                             "code": "email_taken"}, status=status.HTTP_409_CONFLICT)
+        profile = {"first_name": d["first_name"], "last_name": d["last_name"],
+                   "roll_no": d.get("roll_no", ""), "group": d["group"].id if d.get("group") else None}
+        try:
+            info = otp.begin_signup(_otp_store(), email, profile, make_password(d["password"]),
+                                    _send_code, settings.SECRET_KEY, time.time())
+        except otp.OtpError as e:
+            return _otp_error(e)
+        except EmailDeliveryError as e:
+            return _email_unavailable(e)
+        return Response({"email": email, "masked_email": otp.mask_email(email), **info},
+                        status=status.HTTP_202_ACCEPTED)
+
+
+class ResendOtpView(_OtpView):
+    """POST /api/auth/resend-otp/  {email}"""
+    def post(self, request):
+        email = _clean_email(request.data.get("email"))
+        try:
+            info = otp.resend(_otp_store(), email, _send_code, settings.SECRET_KEY, time.time())
+        except otp.OtpError as e:
+            return _otp_error(e)
+        except EmailDeliveryError as e:
+            return _email_unavailable(e)
+        return Response({"email": email, "masked_email": otp.mask_email(email), **info})
+
+
+class VerifyOtpView(_OtpView):
+    """POST /api/auth/verify-otp/  {email, otp}  — creates the (student) account if the code is right."""
+    def post(self, request):
+        email = _clean_email(request.data.get("email"))
+        store = _otp_store()
+        try:
+            state = otp.verify(store, email, request.data.get("otp"), settings.SECRET_KEY, time.time())
+        except otp.OtpError as e:
+            return _otp_error(e)
+        taken = Response({"detail": "An account with this email already exists. Log in instead.",
+                          "code": "email_taken"}, status=status.HTTP_409_CONFLICT)
+        profile = state["profile"]
+        group_id = profile.get("group")
+        if group_id and not Group.objects.filter(pk=group_id).exists():
+            group_id = None
+        try:
+            with transaction.atomic():
+                if _email_taken(email):
+                    store.delete(otp.key_for(email))
+                    return taken
+                user = User(username=email, email=email, first_name=profile["first_name"],
+                            last_name=profile["last_name"], roll_no=profile.get("roll_no", ""),
+                            group_id=group_id, role=User.STUDENT)
+                user.password = state["password_hash"]       # already hashed at sign-up
+                user.save()
+        except IntegrityError:
+            store.delete(otp.key_for(email))
+            return taken
+        store.delete(otp.key_for(email))
+        return Response({"detail": "Email verified. Your account is ready.", "code": "verified"},
+                        status=status.HTTP_201_CREATED)
 
 
 class MeView(generics.RetrieveAPIView):

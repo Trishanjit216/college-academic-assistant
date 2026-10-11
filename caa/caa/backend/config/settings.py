@@ -79,13 +79,25 @@ STORAGES = {
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Pending sign-ups (email OTP) live in a small DB-backed cache table, so they survive restarts and
+# need no migration. The table is created by `createcachetable` (called from seed_demo on every start).
+CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "otp": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", "LOCATION": "caa_otp_cache"},
+}
+
+# Email delivery for OTP codes (Brevo HTTPS API). Both must be set in production.
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "College Academic Assistant")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework_simplejwt.authentication.JWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"auth": "20/hour", "posts": "30/hour"},
+    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "posts": "30/hour"},
 }
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),

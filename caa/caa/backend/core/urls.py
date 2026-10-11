@@ -19,7 +19,9 @@ router.register("reports", v.ReportViewSet)
 urlpatterns = [
     path("auth/token/", v.ThrottledTokenView.as_view()),
     path("auth/refresh/", TokenRefreshView.as_view()),
-    path("auth/register/", v.RegisterView.as_view()),
+    path("auth/register/", v.SignupView.as_view()),
+    path("auth/verify-otp/", v.VerifyOtpView.as_view()),
+    path("auth/resend-otp/", v.ResendOtpView.as_view()),
     path("auth/me/", v.MeView.as_view()),
     path("groups/", v.GroupList.as_view()),
     path("dashboard/", v.DashboardView.as_view()),
