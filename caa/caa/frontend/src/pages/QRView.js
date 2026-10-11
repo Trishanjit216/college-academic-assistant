@@ -1,0 +1,5 @@
+import React, {useEffect, useState} from 'react'; import { useParams, Link } from 'react-router-dom'; import axios from 'axios'; import { Container, Typography, Button } from '@mui/material';
+export default function QRView(){ const {bookingId}=useParams(); const [booking,setBooking]=useState(null); const [qrSrc,setQrSrc]=useState(null);
+  useEffect(()=>{ const fetch = async ()=>{ const token=localStorage.getItem('access'); const res=await axios.get(`/api/bookings/${bookingId}/`, { headers: { Authorization: `Bearer ${token}` }}); setBooking(res.data); const upi = `upi://pay?pa=yourupiid@bank&pn=JourneyWithMe&am=${res.data.amount}&cu=INR`; setQrSrc(`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(upi)}&size=300x300`) }; fetch(); },[bookingId])
+  if(!booking) return <div>Loading...</div>
+  return (<Container sx={{p:3}}><Typography variant='h6'>Show this QR to customer</Typography><img src={qrSrc} alt='UPI QR' /><Typography>Amount: {booking.amount}</Typography><Button component={Link} to={`/booking/${bookingId}/verify`} variant='contained' sx={{mt:2}}>Verify payment (agent)</Button></Container>) }
