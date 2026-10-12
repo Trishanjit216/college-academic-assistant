@@ -141,11 +141,18 @@ class VerifyOtpView(_OtpView):
         group_id = profile.get("group")
         if group_id and not Group.objects.filter(pk=group_id).exists():
             group_id = None
+        roll = profile.get("roll_no", "")
+        section = profile.get("section", "") if group_id else ""
         try:
             with transaction.atomic():
                 if _email_taken(email):
                     store.delete(otp.key_for(email))
                     return taken
+                if roll and User.objects.filter(section=section, roll_no__iexact=roll).exists():
+                    store.delete(otp.key_for(email))
+                    return Response({"detail": f"Roll number {roll} was registered in section {section} by someone else "
+                                               "while you were verifying. Check your roll number and sign up again.",
+                                     "code": "roll_taken"}, status=status.HTTP_409_CONFLICT)
                 user = User(username=email, email=email, first_name=profile["first_name"],
                             last_name=profile["last_name"], roll_no=profile.get("roll_no", ""),
                             group_id=group_id, section=(profile.get("section", "") if group_id else ""),
@@ -154,7 +161,10 @@ class VerifyOtpView(_OtpView):
                 user.save()
         except IntegrityError:
             store.delete(otp.key_for(email))
-            return taken
+            if _email_taken(email):
+                return taken
+            return Response({"detail": "That roll number is already registered in your section.", "code": "roll_taken"},
+                            status=status.HTTP_409_CONFLICT)
         store.delete(otp.key_for(email))
         return Response({"detail": "Email verified. Your account is ready.", "code": "verified"},
                         status=status.HTTP_201_CREATED)

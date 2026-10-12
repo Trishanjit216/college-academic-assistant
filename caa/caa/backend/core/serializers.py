@@ -42,12 +42,17 @@ class SignupSerializer(serializers.Serializer):
         data["first_name"], data["last_name"] = first[:100], last.strip()[:100]
         roll = "".join((data.get("roll_no") or "").split()).upper()
         data["roll_no"] = roll
-        if roll and User.objects.filter(roll_no__iexact=roll).exists():
-            raise serializers.ValidationError({"roll_no": "This roll number is already linked to another account."})
         data["section"] = (data.get("section") or "").strip().upper()
-        err = sections.check(data["group"].name if data.get("group") else None, data["section"])
+        gname = data["group"].name if data.get("group") else None
+        missing = sections.missing_fields(gname, data["section"], roll)
+        if missing:
+            raise serializers.ValidationError({"profile": sections.missing_message(missing)})
+        err = sections.check(gname, data["section"])
         if err:
             raise serializers.ValidationError({"section": err})
+        if User.objects.filter(section=data["section"], roll_no__iexact=roll).exists():
+            where = f"section {data['section']}" if data["section"] else "this group"
+            raise serializers.ValidationError({"roll_no": f"Roll number {roll} is already registered in {where}."})
         probe = User(username=data["email"], email=data["email"], first_name=first, last_name=last)
         try:
             validate_password(data["password"], user=probe)
@@ -66,11 +71,9 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def validate_roll_no(self, value):
         value = "".join((value or "").split()).upper()
-        current = (self.instance.roll_no or "").strip()
-        if current and value != "".join(current.split()).upper():
+        current = "".join((self.instance.roll_no or "").split()).upper()
+        if current and value != current:
             raise serializers.ValidationError("Your roll number is already set. Ask an administrator to change it.")
-        if value and User.objects.filter(roll_no__iexact=value).exclude(pk=self.instance.pk).exists():
-            raise serializers.ValidationError("This roll number is already linked to another account.")
         return value
 
     def validate(self, data):
@@ -79,9 +82,16 @@ class ProfileSerializer(serializers.ModelSerializer):
         if "group" in data and "section" not in data and (data["group"] or None) != (inst.group or None):
             data["section"] = ""                      # changing the group clears an old section
         section = (data["section"] if "section" in data else inst.section or "").strip().upper()
-        err = sections.check(group.name if group else None, section)
+        roll = data.get("roll_no") or "".join((inst.roll_no or "").split()).upper()
+        gname = group.name if group else None
+        missing = sections.missing_fields(gname, section, roll)
+        if missing:
+            raise serializers.ValidationError({"profile": sections.missing_message(missing)})
+        err = sections.check(gname, section)
         if err:
             raise serializers.ValidationError({"section": err})
+        if User.objects.filter(section=section, roll_no__iexact=roll).exclude(pk=inst.pk).exists():
+            raise serializers.ValidationError({"roll_no": f"Roll number {roll} is already registered in section {section}."})
         if "section" in data:
             data["section"] = section
         return data

@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import Icon from "./icons.jsx";
 import { useTheme } from "./theme.js";
 import { safeUrl } from "./pages/ui.jsx";
+import { missingFields } from "./sections.js";
 
 export const FACULTY_URL = safeUrl(import.meta.env.VITE_FACULTY_URL);
 const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
@@ -58,6 +59,7 @@ export default function Shell({ user, onLogout, children }) {
     return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
   }, [open]);
 
+  const incomplete = !["admin", "faculty", "moderator"].includes(user.role) && missingFields(user.group_name, user.section, user.roll_no).length > 0;
   const themeLabel = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
 
   return (
@@ -124,7 +126,16 @@ export default function Shell({ user, onLogout, children }) {
       </aside>
 
       <main id="main" className="main" tabIndex={-1}>
-        <div className="container">{children}</div>
+        <div className="container">
+          {incomplete && pathname !== "/profile" && (
+            <div className="banner" role="status">
+              <Icon name="alert" size={18} />
+              <span>Your profile is incomplete (roll number, group and section are required).</span>
+              <NavLink to="/profile" className="link-btn">Complete profile</NavLink>
+            </div>
+          )}
+          {children}
+        </div>
       </main>
     </div>
   );

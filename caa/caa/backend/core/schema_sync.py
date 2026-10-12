@@ -26,3 +26,31 @@ def ensure_schema():
             editor.add_field(User, User._meta.get_field("section"))
             done.append("user.section")
     return done
+
+
+INDEX = "core_user_section_roll_uniq"
+
+
+def ensure_roll_unique_index():
+    """DB-level guarantee: one roll number per section (case-insensitive). Returns (status, duplicates)."""
+    from django.db import DatabaseError, connection as conn, transaction
+    dups = duplicate_rolls()
+    if dups:
+        return "skipped: duplicate roll numbers exist, fix them first", dups
+    sql = (f"CREATE UNIQUE INDEX IF NOT EXISTS {INDEX} ON {User._meta.db_table} (section, UPPER(roll_no)) "
+           "WHERE roll_no <> '' AND section <> ''")
+    try:
+        with transaction.atomic(), conn.cursor() as cur:
+            cur.execute(sql)
+    except DatabaseError as e:
+        return f"not created: {e}", dups
+    return "ok", dups
+
+
+def duplicate_rolls():
+    """[(section, roll_no, count)] for accounts that share a roll number inside one section."""
+    from collections import Counter
+    c = Counter()
+    for sec, roll in User.objects.exclude(roll_no="").exclude(section="").values_list("section", "roll_no"):
+        c[(sec, "".join(roll.split()).upper())] += 1
+    return [(s, r, n) for (s, r), n in sorted(c.items()) if n > 1]

@@ -31,3 +31,21 @@ def check(group_name, section):
     if section not in allowed:
         return f"Section {section} does not belong to {group_name}. Choose {allowed[0]} to {allowed[-1]}."
     return None
+
+
+def missing_fields(group_name, section, roll_no):
+    """Names of required profile fields that are empty. A section is only required when the group has sections."""
+    out = []
+    if not (roll_no or "").strip():
+        out.append("roll number")
+    if not group_name:
+        out.append("group")
+    elif allowed_sections(group_name) and not (section or "").strip():
+        out.append("section")
+    return out
+
+
+def missing_message(missing):
+    if not missing:
+        return ""
+    return "Please provide your " + (", ".join(missing[:-1]) + " and " + missing[-1] if len(missing) > 1 else missing[0]) + "."

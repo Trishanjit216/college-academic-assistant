@@ -356,3 +356,5 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .profile-card { max-width: 520px; display: grid; gap: var(--s2); }
 .syl-head { position: relative; padding-right: 52px; }
 .syl-chev { position: absolute; right: var(--s4); top: 20px; }
+.banner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s3) var(--s4); margin-bottom: var(--s4); border-radius: var(--r-md); background: var(--warning-soft, #fef3c7); color: var(--warning); font-size: .9rem; }
+.banner .link-btn { color: inherit; font-weight: 600; text-decoration: underline; padding: 0; margin-left: auto; }

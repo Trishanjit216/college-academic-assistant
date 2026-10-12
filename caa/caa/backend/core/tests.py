@@ -111,12 +111,14 @@ class SignupOtpTests(APITestCase):
     """Email-OTP sign-up. Email sending is mocked; real delivery needs a Brevo key."""
     def setUp(self):
         caches["otp"].clear()
+        self.ga = Group.objects.create(name="Group A")
         self.sent = []
         p = mock.patch("core.views.send_via_brevo", side_effect=lambda *a, **k: self.sent.append(a[4:6]))
         p.start(); self.addCleanup(p.stop)
 
     def signup(self, email="new@x.com", **kw):
-        d = {"name": "Asha Rao", "email": email, "password": "Str0ng-pass-99"}; d.update(kw)
+        d = {"name": "Asha Rao", "email": email, "password": "Str0ng-pass-99", "group": self.ga.id,
+             "section": "A1", "roll_no": "R" + email.split("@")[0].upper()}; d.update(kw)
         return self.client.post("/api/auth/register/", d)
 
     def code(self):
@@ -197,7 +199,7 @@ class SectionTests(APITestCase):
         p.start(); self.addCleanup(p.stop)
 
     def signup(self, **kw):
-        d = {"name": "Asha Rao", "email": "s@x.com", "password": "Str0ng-pass-99"}; d.update(kw)
+        d = {"name": "Asha Rao", "email": "s@x.com", "password": "Str0ng-pass-99", "roll_no": "21CS001"}; d.update(kw)
         return self.client.post("/api/auth/register/", d)
 
     def test_valid_section_saved_through_otp_flow(self):
@@ -213,26 +215,53 @@ class SectionTests(APITestCase):
         self.assertEqual(self.sent, [])
 
     def test_profile_update_and_group_change_clears_section(self):
-        u = User.objects.create_user("p", password="pw-12345-x", group=self.ga, section="A1")
+        u = User.objects.create_user("p", password="pw-12345-x", group=self.ga, section="A1", roll_no="21CS001")
         self.client.force_authenticate(u)
-        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.gb.id}).status_code, 200)
-        u.refresh_from_db(); self.assertEqual(u.section, "")
-        self.assertEqual(self.client.patch("/api/auth/me/", {"section": "A4"}).status_code, 400)
-        self.assertEqual(self.client.patch("/api/auth/me/", {"section": "B4"}).status_code, 200)
+        # changing group clears the old section, and a section is then required again
+        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.gb.id}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.gb.id, "section": "A4"}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.gb.id, "section": "B4"}).status_code, 200)
+        u.refresh_from_db(); self.assertEqual((u.group_id, u.section), (self.gb.id, "B4"))
 
     def test_role_cannot_be_changed_via_profile(self):
-        u = User.objects.create_user("p", password="pw-12345-x")
+        u = User.objects.create_user("p", password="pw-12345-x", group=self.ga, section="A1", roll_no="21CS001")
         self.client.force_authenticate(u)
-        self.client.patch("/api/auth/me/", {"role": "admin"})
+        self.client.patch("/api/auth/me/", {"role": "admin", "section": "A2"})
         u.refresh_from_db(); self.assertEqual(u.role, "student")
 
-    def test_roll_no_is_set_once_and_unique(self):
-        User.objects.create_user("other", password="pw-12345-x", roll_no="21CS009")
-        u = User.objects.create_user("p", password="pw-12345-x")
+    def test_all_profile_fields_are_mandatory(self):
+        self.assertEqual(self.signup(roll_no="").status_code, 400)
+        self.assertEqual(self.signup(group=None).status_code, 400)
+        self.assertEqual(self.signup(section="").status_code, 400)
+        self.assertEqual(self.sent, [])
+        old = User.objects.create_user("old", password="pw-12345-x")       # legacy user, incomplete profile
+        self.client.force_authenticate(old)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.ga.id, "section": "A1"}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.ga.id, "section": "A1", "roll_no": "7"}).status_code, 200)
+
+    def test_roll_unique_within_section_only(self):
+        User.objects.create_user("x", password="pw-12345-x", group=self.ga, section="A1", roll_no="21CS009")
+        self.assertEqual(self.signup(roll_no="21cs009", section="A1", email="a@x.com").status_code, 400)   # same section
+        self.assertEqual(self.signup(roll_no="21 CS 009", section="A1", email="b@x.com").status_code, 400)  # spaces/case
+        self.assertEqual(self.signup(roll_no="21CS009", section="A2", email="c@x.com").status_code, 202)   # other section ok
+
+    def test_roll_clash_blocked_on_profile_and_at_verify(self):
+        User.objects.create_user("x", password="pw-12345-x", group=self.ga, section="A1", roll_no="5")
+        u = User.objects.create_user("p", password="pw-12345-x", group=self.ga, section="A2", roll_no="5")
         self.client.force_authenticate(u)
-        self.assertEqual(self.client.patch("/api/auth/me/", {"roll_no": "21cs009"}).status_code, 400)
-        self.assertEqual(self.client.patch("/api/auth/me/", {"roll_no": "21cs001"}).status_code, 200)
-        self.assertEqual(self.client.patch("/api/auth/me/", {"roll_no": "21CS002"}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"section": "A1"}).status_code, 400)
+        self.client.force_authenticate(None)
+        self.assertEqual(self.signup(roll_no="9", section="A3", email="n@x.com").status_code, 202)
+        User.objects.create_user("y", password="pw-12345-x", group=self.ga, section="A3", roll_no="9")   # taken meanwhile
+        r = self.client.post("/api/auth/verify-otp/", {"email": "n@x.com", "otp": self.sent[-1][1]})
+        self.assertEqual((r.status_code, r.data["code"]), (409, "roll_taken"))
+
+    def test_admin_form_validation_blocks_duplicate_roll(self):
+        from django.core.exceptions import ValidationError
+        User.objects.create_user("x", password="pw-12345-x", group=self.ga, section="A1", roll_no="5")
+        dup = User(username="z", group=self.ga, section="A1", roll_no="5")
+        with self.assertRaises(ValidationError):
+            dup.clean()
 
 
 class SyllabusAndSeatTests(APITestCase):

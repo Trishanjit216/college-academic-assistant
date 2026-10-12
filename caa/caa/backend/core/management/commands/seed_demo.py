@@ -11,7 +11,7 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from core.schema_sync import ensure_schema
+from core.schema_sync import ensure_roll_unique_index, ensure_schema
 from core.models import (Assignment, ClassRecord, Event, Experiment, FormGuide, Group, Lab, Subject, User)
 
 
@@ -24,6 +24,10 @@ class Command(BaseCommand):
         # Tables/columns added after the first deploy (no committed migrations); no-op when up to date.
         for what in ensure_schema():
             self.stdout.write(f"Schema updated: {what}")
+        status, dups = ensure_roll_unique_index()
+        self.stdout.write(f"Roll-number uniqueness per section: {status}")
+        for sec, roll, n in dups:
+            self.stdout.write(self.style.WARNING(f"DUPLICATE roll number {roll} in section {sec}: {n} accounts - fix in the admin panel"))
         # Groups A and B are needed by the section picker (not demo data).
         for name in ("Group A", "Group B"):
             Group.objects.get_or_create(name=name)

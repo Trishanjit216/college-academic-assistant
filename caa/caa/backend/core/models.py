@@ -20,6 +20,15 @@ class User(AbstractUser):
     group = models.ForeignKey(Group, null=True, blank=True, on_delete=models.SET_NULL, related_name="students")
     section = models.CharField(max_length=3, blank=True, default="")   # A1..A12 / B1..B12 (see core/sections.py)
 
+    def clean(self):
+        super().clean()
+        roll = "".join((self.roll_no or "").split())
+        if roll and self.section:
+            dup = User.objects.filter(section=self.section, roll_no__iexact=roll).exclude(pk=self.pk)
+            if dup.exists():
+                from django.core.exceptions import ValidationError
+                raise ValidationError(f"Roll number {roll} is already registered in section {self.section}.")
+
     def save(self, *args, **kwargs):
         if self.is_superuser:
             self.role = self.ADMIN

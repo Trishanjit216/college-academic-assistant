@@ -25,6 +25,21 @@ class SectionRules(unittest.TestCase):
         self.assertIn("only available", sections.check("Lab 7", "A1"))
 
 
+class RequiredFields(unittest.TestCase):
+    def test_missing(self):
+        self.assertEqual(sections.missing_fields("Group A", "A1", "21CS001"), [])
+        self.assertEqual(sections.missing_fields("Group A", "", "21CS001"), ["section"])
+        self.assertEqual(sections.missing_fields(None, "", ""), ["roll number", "group"])
+        self.assertEqual(sections.missing_fields("Lab 7", "", "5"), [])        # group without sections
+        self.assertEqual(sections.missing_fields("Group B", " ", " "), ["roll number", "section"])
+
+    def test_message(self):
+        self.assertEqual(sections.missing_message([]), "")
+        self.assertEqual(sections.missing_message(["group"]), "Please provide your group.")
+        self.assertEqual(sections.missing_message(["roll number", "group", "section"]),
+                         "Please provide your roll number, group and section.")
+
+
 GOOD = "roll_no,student_name,exam_name,exam_date,room,seat,instructions\n" \
        "21cs001,Asha Rao,Mid-Term 1,2026-11-03,Room 204,B12,Bring ID\n" \
        "21CS002,,Mid-Term 1,,Hall 1,A3,\n"
