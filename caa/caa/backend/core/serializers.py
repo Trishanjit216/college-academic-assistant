@@ -3,7 +3,8 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from .models import (Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab,
+from . import sections
+from .models import (Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab, SeatAllotment, SyllabusEntry,
                      Notification, Post, Report, Subject)
 
 User = get_user_model()
@@ -14,7 +15,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "username", "first_name", "last_name", "email", "role", "roll_no", "group", "group_name"]
+        fields = ["id", "username", "first_name", "last_name", "email", "role", "roll_no", "group", "group_name", "section"]
         read_only_fields = ["role"]
 
 
@@ -28,6 +29,7 @@ class SignupSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True, max_length=128, trim_whitespace=False)
     roll_no = serializers.CharField(max_length=30, required=False, allow_blank=True)
     group = serializers.PrimaryKeyRelatedField(queryset=Group.objects.all(), required=False, allow_null=True)
+    section = serializers.CharField(max_length=3, required=False, allow_blank=True)
 
     def validate_email(self, value):
         return value.strip().lower()
@@ -38,11 +40,50 @@ class SignupSerializer(serializers.Serializer):
             raise serializers.ValidationError({"name": "Enter your name."})
         first, _, last = full.partition(" ")
         data["first_name"], data["last_name"] = first[:100], last.strip()[:100]
+        roll = "".join((data.get("roll_no") or "").split()).upper()
+        data["roll_no"] = roll
+        if roll and User.objects.filter(roll_no__iexact=roll).exists():
+            raise serializers.ValidationError({"roll_no": "This roll number is already linked to another account."})
+        data["section"] = (data.get("section") or "").strip().upper()
+        err = sections.check(data["group"].name if data.get("group") else None, data["section"])
+        if err:
+            raise serializers.ValidationError({"section": err})
         probe = User(username=data["email"], email=data["email"], first_name=first, last_name=last)
         try:
             validate_password(data["password"], user=probe)
         except DjangoValidationError as e:
             raise serializers.ValidationError({"password": list(e.messages)})
+        return data
+
+
+class ProfileSerializer(serializers.ModelSerializer):
+    """What a logged-in user may change about themselves: group, section, and (once) roll number."""
+    class Meta:
+        model = User
+        fields = ["roll_no", "group", "section"]
+        extra_kwargs = {"roll_no": {"required": False}, "group": {"required": False, "allow_null": True},
+                        "section": {"required": False, "allow_blank": True}}
+
+    def validate_roll_no(self, value):
+        value = "".join((value or "").split()).upper()
+        current = (self.instance.roll_no or "").strip()
+        if current and value != "".join(current.split()).upper():
+            raise serializers.ValidationError("Your roll number is already set. Ask an administrator to change it.")
+        if value and User.objects.filter(roll_no__iexact=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("This roll number is already linked to another account.")
+        return value
+
+    def validate(self, data):
+        inst = self.instance
+        group = data["group"] if "group" in data else inst.group
+        if "group" in data and "section" not in data and (data["group"] or None) != (inst.group or None):
+            data["section"] = ""                      # changing the group clears an old section
+        section = (data["section"] if "section" in data else inst.section or "").strip().upper()
+        err = sections.check(group.name if group else None, section)
+        if err:
+            raise serializers.ValidationError({"section": err})
+        if "section" in data:
+            data["section"] = section
         return data
 
 
@@ -163,3 +204,20 @@ class ReportSerializer(serializers.ModelSerializer):
         model = Report
         fields = ["id", "post", "comment", "post_title", "post_body", "comment_body",
                   "reason", "created_at", "resolved"]   # reporter & author identities not exposed
+
+
+class SyllabusEntrySerializer(serializers.ModelSerializer):
+    subject_code = serializers.CharField(source="subject.code", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+
+    class Meta:
+        model = SyllabusEntry
+        fields = ["id", "subject", "subject_code", "subject_name", "semester", "exam", "content",
+                  "pdf_url", "verified", "updated_at"]
+        read_only_fields = ["updated_at"]
+
+
+class SeatSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SeatAllotment
+        fields = ["roll_no", "student_name", "exam_name", "exam_date", "room", "seat", "instructions"]

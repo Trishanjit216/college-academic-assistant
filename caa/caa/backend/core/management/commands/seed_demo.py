@@ -6,10 +6,12 @@
 import os
 from datetime import timedelta
 
+from django.core.cache import caches
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from core.schema_sync import ensure_schema
 from core.models import (Assignment, ClassRecord, Event, Experiment, FormGuide, Group, Lab, Subject, User)
 
 
@@ -19,9 +21,26 @@ class Command(BaseCommand):
     def handle(self, *args, **opts):
         # Pending OTP sign-ups are stored in a DB cache table; this is a no-op if it already exists.
         call_command("createcachetable", verbosity=0)
+        # Tables/columns added after the first deploy (no committed migrations); no-op when up to date.
+        for what in ensure_schema():
+            self.stdout.write(f"Schema updated: {what}")
+        # Groups A and B are needed by the section picker (not demo data).
+        for name in ("Group A", "Group B"):
+            Group.objects.get_or_create(name=name)
         self.make_admin()
         if os.environ.get("SEED_DEMO_DATA", "1") == "1":
+            self.seed_once()
+
+    def seed_once(self):
+        """Demo content is created only on the very first run. Without this, anything the admin deleted
+        (e.g. 'Problem Set 1') would be recreated on the next deploy/restart."""
+        store = caches["otp"]
+        if store.get("demo_seeded"):
+            return
+        # Existing site that already has data: treat as seeded so deleted demo rows never come back.
+        if not (Subject.objects.exists() or ClassRecord.objects.exists() or Assignment.objects.exists()):
             self.make_demo_content()
+        store.set("demo_seeded", 1, 60 * 60 * 24 * 365 * 10)
 
     def make_admin(self):
         pw = os.environ.get("DEMO_ADMIN_PASSWORD")

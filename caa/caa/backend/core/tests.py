@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .management.commands.send_reminders import send_due_reminders
-from .models import Assignment, Notification, Post, Subject, User
+from .models import Assignment, Group, Notification, Post, SeatAllotment, Subject, SyllabusEntry, User
 
 
 class AuthAndPermissionTests(APITestCase):
@@ -184,3 +184,113 @@ class SignupOtpTests(APITestCase):
     def test_legacy_username_login_still_works(self):
         User.objects.create_user("legacy", password="pw-12345-x")
         self.assertEqual(self.client.post("/api/auth/token/", {"username": "legacy", "password": "pw-12345-x"}).status_code, 200)
+
+
+@override_settings(CACHES=LOCMEM, BREVO_API_KEY="k", EMAIL_FROM="a@b.c")
+class SectionTests(APITestCase):
+    def setUp(self):
+        caches["otp"].clear()
+        self.ga = Group.objects.create(name="Group A")
+        self.gb = Group.objects.create(name="Group B")
+        self.sent = []
+        p = mock.patch("core.views.send_via_brevo", side_effect=lambda *a, **k: self.sent.append(a[4:6]))
+        p.start(); self.addCleanup(p.stop)
+
+    def signup(self, **kw):
+        d = {"name": "Asha Rao", "email": "s@x.com", "password": "Str0ng-pass-99"}; d.update(kw)
+        return self.client.post("/api/auth/register/", d)
+
+    def test_valid_section_saved_through_otp_flow(self):
+        self.assertEqual(self.signup(group=self.ga.id, section="A7").status_code, 202)
+        self.client.post("/api/auth/verify-otp/", {"email": "s@x.com", "otp": self.sent[-1][1]})
+        u = User.objects.get(email="s@x.com")
+        self.assertEqual((u.group_id, u.section), (self.ga.id, "A7"))
+
+    def test_mismatched_or_groupless_section_rejected(self):
+        self.assertEqual(self.signup(group=self.ga.id, section="B2").status_code, 400)
+        self.assertEqual(self.signup(group=self.gb.id, section="B13").status_code, 400)
+        self.assertEqual(self.signup(section="A1").status_code, 400)
+        self.assertEqual(self.sent, [])
+
+    def test_profile_update_and_group_change_clears_section(self):
+        u = User.objects.create_user("p", password="pw-12345-x", group=self.ga, section="A1")
+        self.client.force_authenticate(u)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"group": self.gb.id}).status_code, 200)
+        u.refresh_from_db(); self.assertEqual(u.section, "")
+        self.assertEqual(self.client.patch("/api/auth/me/", {"section": "A4"}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"section": "B4"}).status_code, 200)
+
+    def test_role_cannot_be_changed_via_profile(self):
+        u = User.objects.create_user("p", password="pw-12345-x")
+        self.client.force_authenticate(u)
+        self.client.patch("/api/auth/me/", {"role": "admin"})
+        u.refresh_from_db(); self.assertEqual(u.role, "student")
+
+    def test_roll_no_is_set_once_and_unique(self):
+        User.objects.create_user("other", password="pw-12345-x", roll_no="21CS009")
+        u = User.objects.create_user("p", password="pw-12345-x")
+        self.client.force_authenticate(u)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"roll_no": "21cs009"}).status_code, 400)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"roll_no": "21cs001"}).status_code, 200)
+        self.assertEqual(self.client.patch("/api/auth/me/", {"roll_no": "21CS002"}).status_code, 400)
+
+
+class SyllabusAndSeatTests(APITestCase):
+    def setUp(self):
+        self.stu = User.objects.create_user("stu", password="pw-12345-x", roll_no="21CS001")
+        self.other = User.objects.create_user("o", password="pw-12345-x")
+        self.fac = User.objects.create_user("fac", password="pw-12345-x", role="faculty")
+        self.adm = User.objects.create_user("adm", password="pw-12345-x", role="admin")
+        self.sub = Subject.objects.create(code="MA101", name="Maths")
+        SeatAllotment.objects.create(roll_no="21CS001", exam_name="Mid-Term 1", room="R1", seat="4")
+        SeatAllotment.objects.create(roll_no="21CS002", exam_name="Mid-Term 1", room="R1", seat="5")
+
+    def test_syllabus_read_for_students_write_for_editors(self):
+        SyllabusEntry.objects.create(subject=self.sub, exam="mid1", semester=1, content="Unit 1: Limits")
+        self.client.force_authenticate(self.stu)
+        r = self.client.get("/api/syllabus/")
+        self.assertEqual(r.status_code, 200); self.assertEqual(r.data[0]["subject_code"], "MA101")
+        self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 403)
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 201)
+
+    def test_syllabus_requires_login(self):
+        self.assertEqual(self.client.get("/api/syllabus/").status_code, 401)
+
+    def test_student_sees_only_own_seat(self):
+        self.client.force_authenticate(self.stu)
+        r = self.client.get("/api/seats/lookup/")
+        self.assertEqual(r.status_code, 200); self.assertEqual(len(r.data["results"]), 1)
+        self.assertEqual(r.data["results"][0]["seat"], "4")
+        self.assertEqual(self.client.get("/api/seats/lookup/?roll_no=21cs001").status_code, 200)
+        self.assertEqual(self.client.get("/api/seats/lookup/?roll_no=21CS002").status_code, 403)
+
+    def test_student_without_roll_no_and_anonymous(self):
+        self.client.force_authenticate(self.other)
+        self.assertEqual(self.client.get("/api/seats/lookup/").data["code"], "no_roll_no")
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get("/api/seats/lookup/").status_code, 401)
+
+    def test_staff_can_look_up_any_roll_but_no_listing_exists(self):
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(len(self.client.get("/api/seats/lookup/?roll_no=21CS002").data["results"]), 1)
+        self.assertEqual(self.client.get("/api/seats/lookup/").status_code, 400)
+        self.assertEqual(self.client.get("/api/seats/").status_code, 404)
+
+    def test_import_admin_only_dry_run_then_commit(self):
+        csv_text = "roll_no,exam_name,room,seat\n21CS003,Mid-Term 1,R2,9\n,Mid-Term 1,R2,10\n"
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(self.client.post("/api/seats/import/", {"csv": csv_text}, format="json").status_code, 403)
+        self.client.force_authenticate(self.adm)
+        r = self.client.post("/api/seats/import/", {"csv": csv_text, "dry_run": True}, format="json")
+        self.assertEqual((r.data["valid_rows"], r.data["error_count"]), (1, 1))
+        self.assertFalse(SeatAllotment.objects.filter(roll_no="21CS003").exists())
+        r = self.client.post("/api/seats/import/", {"csv": csv_text, "dry_run": False}, format="json")
+        self.assertEqual(r.data["created"], 1)
+        self.assertTrue(SeatAllotment.objects.filter(roll_no="21CS003").exists())
+        r = self.client.post("/api/seats/import/", {"csv": "bad,header\n1,2", "dry_run": False}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_ensure_schema_is_a_noop_when_up_to_date(self):
+        from .schema_sync import ensure_schema
+        self.assertEqual(ensure_schema(), [])

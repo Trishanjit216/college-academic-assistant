@@ -97,7 +97,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "posts": "30/hour"},
+    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "posts": "30/hour"},
 }
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),

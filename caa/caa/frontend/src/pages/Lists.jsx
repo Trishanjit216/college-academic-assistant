@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api.js";
 import Icon from "../icons.jsx";
 import { useToast } from "../toast.jsx";
-import { Badge, Button, ListPage, dueInfo, fmtD, fmtDT } from "./ui.jsx";
+import { Badge, Button, Linkify, ListPage, dueInfo, fmtD, fmtDT } from "./ui.jsx";
 
 const STATUS_TONE = { completed: "success", ongoing: "primary", planned: "neutral" };
 
@@ -26,7 +26,7 @@ export const Records = () => (
           </div>
           <Badge tone={STATUS_TONE[r.status] || "neutral"}>{r.status}</Badge>
         </div>
-        {r.notes && <p className="card-body">{r.notes}</p>}
+        {r.notes && <p className="card-body"><Linkify text={r.notes} /></p>}
       </article>
     )}
   />
@@ -61,14 +61,14 @@ export const Labs = () => (
             {e.group_names.map((g) => <Badge key={g} tone="primary">{g}</Badge>)}
           </div>
         )}
-        {e.aim && <p className="card-body"><strong>Aim: </strong>{e.aim}</p>}
+        {e.aim && <p className="card-body"><strong>Aim: </strong><Linkify text={e.aim} /></p>}
         {(e.apparatus || e.procedure || e.submission_requirements) && (
           <details className="more">
             <summary>Apparatus, procedure and submission</summary>
             <dl className="facts">
-              {e.apparatus && <div><dt>Apparatus / software</dt><dd>{e.apparatus}</dd></div>}
-              {e.procedure && <div><dt>Procedure</dt><dd>{e.procedure}</dd></div>}
-              {e.submission_requirements && <div><dt>Submission</dt><dd>{e.submission_requirements}</dd></div>}
+              {e.apparatus && <div><dt>Apparatus / software</dt><dd><Linkify text={e.apparatus} /></dd></div>}
+              {e.procedure && <div><dt>Procedure</dt><dd><Linkify text={e.procedure} /></dd></div>}
+              {e.submission_requirements && <div><dt>Submission</dt><dd><Linkify text={e.submission_requirements} /></dd></div>}
             </dl>
           </details>
         )}
@@ -101,8 +101,8 @@ function AssignmentCard({ a, reload }) {
         </div>
         <Badge tone={due.tone}>{due.label}</Badge>
       </div>
-      {a.description && <p className="card-body">{a.description}</p>}
-      {a.submission_method && <p className="muted" style={{ marginTop: 8 }}>How to submit: {a.submission_method}</p>}
+      {a.description && <p className="card-body"><Linkify text={a.description} /></p>}
+      {a.submission_method && <p className="muted" style={{ marginTop: 8 }}>How to submit: <Linkify text={a.submission_method} /></p>}
       <div className="card-actions">
         <Button variant={a.done ? "secondary" : "primary"} size="sm" loading={busy} icon={a.done ? undefined : "check"} onClick={toggle}>
           {a.done ? "Mark as not done" : "Mark as done"}
@@ -148,11 +148,11 @@ export const Events = () => (
               {e.venue && <span><Icon name="pin" size={16} />{e.venue}</span>}
               {e.organizer && <span><Icon name="user" size={16} />{e.organizer}</span>}
             </div>
-            {e.description && <p className="card-body">{e.description}</p>}
+            {e.description && <p className="card-body"><Linkify text={e.description} /></p>}
             {(e.registration_info || e.eligibility) && (
               <dl className="facts">
-                {e.registration_info && <div><dt>Registration</dt><dd>{e.registration_info}</dd></div>}
-                {e.eligibility && <div><dt>Eligibility</dt><dd>{e.eligibility}</dd></div>}
+                {e.registration_info && <div><dt>Registration</dt><dd><Linkify text={e.registration_info} /></dd></div>}
+                {e.eligibility && <div><dt>Eligibility</dt><dd><Linkify text={e.eligibility} /></dd></div>}
               </dl>
             )}
           </div>
@@ -174,24 +174,24 @@ export const Forms = () => (
           <h2 className="card-title">{f.name}</h2>
           {f.deadline && <Badge tone="warning">Deadline {fmtD(f.deadline)}</Badge>}
         </div>
-        {f.purpose && <p className="card-body">{f.purpose}</p>}
+        {f.purpose && <p className="card-body"><Linkify text={f.purpose} /></p>}
         {f.documents_list.length > 0 && (
           <>
             <h3 style={{ marginTop: 16 }}>Documents you need</h3>
             <ul className="checklist">
-              {f.documents_list.map((x) => <li key={x}><Icon name="check" size={16} /><span>{x}</span></li>)}
+              {f.documents_list.map((x) => <li key={x}><Icon name="check" size={16} /><span><Linkify text={x} /></span></li>)}
             </ul>
           </>
         )}
         {(f.accepted_formats || f.file_size_limit || f.photo_signature_specs || f.how_to_submit) && (
           <dl className="facts">
-            {f.accepted_formats && <div><dt>File formats</dt><dd>{f.accepted_formats}</dd></div>}
+            {f.accepted_formats && <div><dt>File formats</dt><dd><Linkify text={f.accepted_formats} /></dd></div>}
             {f.file_size_limit && <div><dt>File size</dt><dd>{f.file_size_limit}</dd></div>}
-            {f.photo_signature_specs && <div><dt>Photo and signature</dt><dd>{f.photo_signature_specs}</dd></div>}
-            {f.how_to_submit && <div><dt>How to submit</dt><dd>{f.how_to_submit}</dd></div>}
+            {f.photo_signature_specs && <div><dt>Photo and signature</dt><dd><Linkify text={f.photo_signature_specs} /></dd></div>}
+            {f.how_to_submit && <div><dt>How to submit</dt><dd><Linkify text={f.how_to_submit} /></dd></div>}
           </dl>
         )}
-        {f.instructions && <p className="card-body"><strong>Common mistakes: </strong>{f.instructions}</p>}
+        {f.instructions && <p className="card-body"><strong>Common mistakes: </strong><Linkify text={f.instructions} /></p>}
       </article>
     )}
   />

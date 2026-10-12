@@ -18,6 +18,7 @@ class User(AbstractUser):
     role = models.CharField(max_length=10, choices=ROLES, default=STUDENT)
     roll_no = models.CharField(max_length=30, blank=True)
     group = models.ForeignKey(Group, null=True, blank=True, on_delete=models.SET_NULL, related_name="students")
+    section = models.CharField(max_length=3, blank=True, default="")   # A1..A12 / B1..B12 (see core/sections.py)
 
     def save(self, *args, **kwargs):
         if self.is_superuser:
@@ -197,3 +198,49 @@ class Report(models.Model):
 
     class Meta:
         ordering = ["resolved", "-created_at"]
+
+
+class SyllabusEntry(models.Model):
+    """Syllabus of one subject for one examination. Content is entered by an administrator / faculty member
+    from official documents; nothing is pre-filled. Format of `content`: a line starting with 'Unit' or a
+    number starts a unit; lines starting with '-' are topics; lines starting with '--' are subtopics."""
+    MID1, MID2, END = "mid1", "mid2", "end"
+    EXAMS = [(MID1, "Mid-Term 1"), (MID2, "Mid-Term 2"), (END, "End-Semester")]
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="syllabus_entries")
+    semester = models.PositiveSmallIntegerField(null=True, blank=True)
+    exam = models.CharField(max_length=5, choices=EXAMS)
+    content = models.TextField(blank=True)
+    pdf_url = models.URLField(blank=True, max_length=500, help_text="Link to the official syllabus PDF, if any")
+    verified = models.BooleanField(default=False, help_text="Tick once checked against the official document")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("subject", "exam")]
+        ordering = ["semester", "subject__name", "exam"]
+        verbose_name_plural = "syllabus entries"
+
+    def __str__(self):
+        return f"{self.subject.code} {self.get_exam_display()}"
+
+
+class SeatAllotment(models.Model):
+    """One student's seat for one exam. Only ever filled from data supplied by an authorised source."""
+    roll_no = models.CharField(max_length=30, db_index=True, help_text="Stored upper-case, no spaces")
+    student_name = models.CharField(max_length=150, blank=True)
+    exam_name = models.CharField(max_length=150)
+    exam_date = models.DateField(null=True, blank=True)
+    room = models.CharField(max_length=60)
+    seat = models.CharField(max_length=30)
+    instructions = models.CharField(max_length=500, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("roll_no", "exam_name", "exam_date")]
+        ordering = ["exam_date", "exam_name"]
+
+    def save(self, *args, **kwargs):
+        self.roll_no = "".join(self.roll_no.split()).upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.roll_no} {self.exam_name}"

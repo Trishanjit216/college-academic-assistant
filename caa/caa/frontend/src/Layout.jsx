@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import Icon from "./icons.jsx";
 import { useTheme } from "./theme.js";
+import { safeUrl } from "./pages/ui.jsx";
 
+export const FACULTY_URL = safeUrl(import.meta.env.VITE_FACULTY_URL);
 const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
 
 function groupsFor(user) {
@@ -14,10 +16,13 @@ function groupsFor(user) {
       { to: "/records", label: "Classes", icon: "classes" },
       { to: "/labs", label: "Labs", icon: "labs" },
       { to: "/assignments", label: "Assignments", icon: "assignments" },
+      { to: "/syllabus", label: "Syllabus", icon: "syllabus" },
+      { to: "/seats", label: "Exam seats", icon: "seat" },
     ] },
     { label: "Campus", items: [
       { to: "/events", label: "Events", icon: "events" },
       { to: "/forms", label: "Forms", icon: "forms" },
+      ...(FACULTY_URL ? [{ href: FACULTY_URL, label: "Know Your Faculty", icon: "user" }] : []),
     ] },
     { label: "Community", items: [
       { to: "/discussion", label: "Discussion", icon: "discussion" },
@@ -87,7 +92,7 @@ export default function Shell({ user, onLogout, children }) {
             <div className="nav-group" key={g.label}>
               <div className="nav-label">{g.label}</div>
               {g.items.map((it) => it.href ? (
-                <a key={it.label} className="nav-link" href={it.href} target="_blank" rel="noreferrer">
+                <a key={it.label} className="nav-link" href={it.href} target="_blank" rel="noopener noreferrer">
                   <Icon name={it.icon} size={18} /><span>{it.label}</span>
                 </a>
               ) : (
@@ -101,11 +106,13 @@ export default function Shell({ user, onLogout, children }) {
 
         <div className="sidebar-foot">
           <div className="user">
-            <span className="avatar" aria-hidden="true">{initials(user)}</span>
-            <div className="user-text">
-              <strong>{user.first_name || user.username}</strong>
-              <span className="muted">{user.role}</span>
-            </div>
+            <NavLink to="/profile" className="user-link" aria-label="Your profile">
+              <span className="avatar" aria-hidden="true">{initials(user)}</span>
+              <span className="user-text">
+                <strong>{user.first_name || user.username}</strong>
+                <span className="muted">{user.role}{user.section ? ` · ${user.section}` : ""}</span>
+              </span>
+            </NavLink>
           </div>
           <div className="foot-actions">
             <button className="icon-btn only-desktop" aria-label={themeLabel} onClick={toggleTheme}>

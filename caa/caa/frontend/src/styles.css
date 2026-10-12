@@ -307,3 +307,52 @@ details.more summary { cursor: pointer; font-weight: 600; font-size: .875rem; co
 .otp-input { text-align: center; font-size: 1.5rem; letter-spacing: .5em; font-variant-numeric: tabular-nums; padding-left: .5em; }
 .otp-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s2); }
 .link-btn:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
+
+/* Links in text, profile link */
+.text-link { color: var(--primary-text); text-decoration: underline; text-underline-offset: 2px; word-break: break-word; border-radius: 3px; }
+.text-link:hover { text-decoration-thickness: 2px; }
+.text-link:focus-visible, a.card:focus-visible, a.btn:focus-visible, .user-link:focus-visible, .syl-head:focus-visible { outline: none; box-shadow: var(--focus); }
+a.card { text-decoration: none; color: inherit; }
+a.card:active { transform: translateY(1px); }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.user-link { display: flex; align-items: center; gap: var(--s3); min-width: 0; color: inherit; text-decoration: none; border-radius: var(--r-md); }
+.user-link:hover .user-text strong { text-decoration: underline; }
+
+/* Academic syllabus */
+.syl-group + .syl-group { margin-top: var(--s6); }
+.syl-sem { font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: var(--s5) 0 var(--s3); }
+.syl-card { padding: 0; overflow: hidden; }
+.syl-head { width: 100%; display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; text-align: left; padding: var(--s4) var(--s5); background: none; border: 0; font: inherit; color: inherit; cursor: pointer; min-height: 56px; }
+.syl-head:hover { background: var(--surface-2); }
+.syl-title { display: grid; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.syl-code { font-size: .78rem; font-weight: 600; color: var(--muted); letter-spacing: .03em; }
+.syl-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.syl-chev { transition: transform .15s; color: var(--muted); }
+.syl-chev.is-open { transform: rotate(90deg); }
+.syl-panel { padding: 0 var(--s5) var(--s5); border-top: 1px solid var(--border); }
+.syl-tabs { margin: var(--s4) 0; }
+.syl-tabs .tab { flex: 1; }
+.syl-meta { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s2); }
+.syl-note { margin-bottom: var(--s3); }
+.syl-content p { color: var(--text-2); margin-bottom: var(--s2); }
+.syl-unit { margin-top: var(--s4); }
+.syl-unit h4 { font-size: .95rem; font-weight: 600; margin-bottom: var(--s2); }
+.syl-unit ul { margin: 0; padding-left: 1.2rem; display: grid; gap: 4px; color: var(--text-2); }
+.syl-unit ul ul { margin-top: 4px; list-style: circle; }
+.syl-filter { margin: 0; min-width: 180px; }
+
+/* Exam seats */
+.seat-search { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3); margin-bottom: var(--s4); }
+.seat-search .field { flex: 1 1 220px; margin: 0; }
+.seat-search p { flex: 1 1 220px; }
+.seat-facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s3); margin: var(--s4) 0 0; }
+.seat-facts > div { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s3) var(--s4); }
+.seat-facts dt { font-size: .78rem; font-weight: 600; color: var(--muted); }
+.seat-facts dd { margin: 2px 0 0; font-size: 1.4rem; font-weight: 700; overflow-wrap: anywhere; }
+.seat-note { margin-top: var(--s3); }
+.import-panel { margin-top: var(--s6); }
+.import-panel code { font-size: .8rem; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.import-errors { margin: var(--s2) 0 0; padding-left: 1.1rem; max-height: 200px; overflow: auto; }
+.profile-card { max-width: 520px; display: grid; gap: var(--s2); }
+.syl-head { position: relative; padding-right: 52px; }
+.syl-chev { position: absolute; right: var(--s4); top: 20px; }

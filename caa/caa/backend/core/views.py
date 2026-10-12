@@ -21,8 +21,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from . import serializers as s
 from .models import (Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, Report, Subject)
-from . import otp
+                     FormGuide, Group, Lab, Notification, Post, Report, SeatAllotment, Subject,
+                     SyllabusEntry)
+from . import otp, seat_import
 from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import IsModerator, ReadAllEditorsWrite
 
@@ -99,7 +100,8 @@ class SignupView(_OtpView):
             return Response({"detail": "An account with this email already exists. Log in instead.",
                              "code": "email_taken"}, status=status.HTTP_409_CONFLICT)
         profile = {"first_name": d["first_name"], "last_name": d["last_name"],
-                   "roll_no": d.get("roll_no", ""), "group": d["group"].id if d.get("group") else None}
+                   "roll_no": d.get("roll_no", ""), "group": d["group"].id if d.get("group") else None,
+                   "section": d.get("section", "")}
         try:
             info = otp.begin_signup(_otp_store(), email, profile, make_password(d["password"]),
                                     _send_code, settings.SECRET_KEY, time.time())
@@ -146,7 +148,8 @@ class VerifyOtpView(_OtpView):
                     return taken
                 user = User(username=email, email=email, first_name=profile["first_name"],
                             last_name=profile["last_name"], roll_no=profile.get("roll_no", ""),
-                            group_id=group_id, role=User.STUDENT)
+                            group_id=group_id, section=(profile.get("section", "") if group_id else ""),
+                            role=User.STUDENT)
                 user.password = state["password_hash"]       # already hashed at sign-up
                 user.save()
         except IntegrityError:
@@ -157,11 +160,21 @@ class VerifyOtpView(_OtpView):
                         status=status.HTTP_201_CREATED)
 
 
-class MeView(generics.RetrieveAPIView):
+class MeView(generics.RetrieveUpdateAPIView):
+    """GET your profile; PATCH group / section / roll number (roll number can only be set once)."""
     serializer_class = s.UserSerializer
+    http_method_names = ["get", "patch", "head", "options"]
 
     def get_object(self):
         return self.request.user
+
+    def partial_update(self, request, *args, **kwargs):
+        ser = s.ProfileSerializer(request.user, data=request.data, partial=True)
+        if not ser.is_valid():
+            msgs = [str(m) for errs in ser.errors.values() for m in ([errs] if isinstance(errs, str) else errs)]
+            return Response({"detail": " ".join(msgs), "errors": ser.errors}, status=status.HTTP_400_BAD_REQUEST)
+        ser.save()
+        return Response(s.UserSerializer(request.user).data)
 
 
 class GroupList(generics.ListAPIView):
@@ -391,3 +404,62 @@ class CronReminderView(APIView):
         if not secret or not hmac.compare_digest(secret, given):
             return Response(status=status.HTTP_403_FORBIDDEN)
         return Response({"notifications_created": send_due_reminders()})
+
+
+class SyllabusViewSet(BaseViewSet):
+    """Read for everyone logged in; create/edit for faculty/admin (or via the Django admin)."""
+    queryset = SyllabusEntry.objects.select_related("subject")
+    serializer_class = s.SyllabusEntrySerializer
+    search_fields = ["subject__name", "subject__code", "content"]
+    pagination_class = None
+
+
+class SeatLookupView(APIView):
+    """GET /api/seats/lookup/?roll_no=...
+    Students only ever get THEIR OWN seat (roll number from their profile). Faculty/admin can look up any roll
+    number. There is no endpoint that lists the whole allotment."""
+    throttle_scope = "seats"
+
+    def get(self, request):
+        user = request.user
+        asked = seat_import.normalize_roll(request.query_params.get("roll_no"))
+        mine = seat_import.normalize_roll(user.roll_no)
+        if user.is_editor:
+            roll = asked or mine
+        else:
+            if not mine:
+                return Response({"detail": "Add your roll number to your profile to see your seat.",
+                                 "code": "no_roll_no"}, status=status.HTTP_400_BAD_REQUEST)
+            if asked and asked != mine:
+                return Response({"detail": "You can only view your own seat allotment.", "code": "forbidden"},
+                                status=status.HTTP_403_FORBIDDEN)
+            roll = mine
+        if not roll:
+            return Response({"detail": "Enter a roll number.", "code": "no_roll_no"}, status=400)
+        rows = SeatAllotment.objects.filter(roll_no=roll)
+        return Response({"roll_no": roll, "published": SeatAllotment.objects.exists(),
+                         "results": s.SeatSerializer(rows, many=True).data})
+
+
+class SeatImportView(APIView):
+    """POST /api/seats/import/  {"csv": "...", "dry_run": true|false}  (administrators only)."""
+    def post(self, request):
+        u = request.user
+        if not (u.is_superuser or u.role == User.ADMIN):
+            return Response({"detail": "Only administrators can import seat allotments."}, status=403)
+        try:
+            rows, errors = seat_import.parse_csv(request.data.get("csv"))
+        except seat_import.ImportProblem as e:
+            return Response({"detail": str(e), "code": "invalid_file"}, status=400)
+        dry = bool(request.data.get("dry_run", True))
+        created = updated = 0
+        if not dry and rows:
+            with transaction.atomic():
+                for r in rows:
+                    key = {k: r[k] for k in ("roll_no", "exam_name", "exam_date")}
+                    _, made = SeatAllotment.objects.update_or_create(
+                        **key, defaults={k: r[k] for k in ("room", "seat", "student_name", "instructions")})
+                    created += made
+                    updated += not made
+        return Response({"dry_run": dry, "valid_rows": len(rows), "created": created, "updated": updated,
+                         "error_count": len(errors), "errors": errors[:50]})

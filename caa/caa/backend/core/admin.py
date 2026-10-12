@@ -2,15 +2,15 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
 from .models import (Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, ReminderLog, Report, Subject, User)
+                     FormGuide, Group, Lab, Notification, Post, ReminderLog, Report, SeatAllotment, Subject, SyllabusEntry, User)
 
 
 @admin.register(User)
 class CAAUserAdmin(UserAdmin):
-    fieldsets = UserAdmin.fieldsets + (("College", {"fields": ("role", "roll_no", "group")}),)
-    add_fieldsets = UserAdmin.add_fieldsets + (("College", {"fields": ("role", "roll_no", "group")}),)
-    list_display = ("username", "first_name", "last_name", "role", "roll_no", "group", "is_active")
-    list_filter = ("role", "group", "is_active")
+    fieldsets = UserAdmin.fieldsets + (("College", {"fields": ("role", "roll_no", "group", "section")}),)
+    add_fieldsets = UserAdmin.add_fieldsets + (("College", {"fields": ("role", "roll_no", "group", "section")}),)
+    list_display = ("username", "first_name", "last_name", "role", "roll_no", "group", "section", "is_active")
+    list_filter = ("role", "group", "section", "is_active")
     search_fields = ("username", "first_name", "last_name", "roll_no", "email")
 
 
@@ -94,6 +94,20 @@ class CommentAdmin(admin.ModelAdmin):
 class ReportAdmin(admin.ModelAdmin):
     list_display = ("created_at", "post", "comment", "reporter", "reason", "resolved")
     list_filter = ("resolved",)
+
+
+@admin.register(SyllabusEntry)
+class SyllabusEntryAdmin(admin.ModelAdmin):
+    list_display = ("subject", "exam", "semester", "verified", "updated_at")
+    list_filter = ("semester", "exam", "verified", "subject")
+    search_fields = ("subject__name", "subject__code", "content")
+
+
+@admin.register(SeatAllotment)
+class SeatAllotmentAdmin(admin.ModelAdmin):
+    list_display = ("roll_no", "student_name", "exam_name", "exam_date", "room", "seat")
+    list_filter = ("exam_name", "exam_date")
+    search_fields = ("roll_no", "student_name")
 
 
 admin.site.register([Group, Notification, ReminderLog, AssignmentProgress])

@@ -7,6 +7,9 @@ import Dashboard from "./pages/Dashboard.jsx";
 import { Assignments, Events, Forms, Labs, Notifications, Records } from "./pages/Lists.jsx";
 import Discussion from "./pages/Discussion.jsx";
 import Moderation from "./pages/Moderation.jsx";
+import Syllabus from "./pages/Syllabus.jsx";
+import Seats from "./pages/Seats.jsx";
+import Profile from "./pages/Profile.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -37,6 +40,9 @@ export default function App() {
         <Route path="/records" element={<Records />} />
         <Route path="/labs" element={<Labs />} />
         <Route path="/assignments" element={<Assignments />} />
+        <Route path="/syllabus" element={<Syllabus user={user} />} />
+        <Route path="/seats" element={<Seats user={user} />} />
+        <Route path="/profile" element={<Profile user={user} onSaved={load} />} />
         <Route path="/events" element={<Events />} />
         <Route path="/forms" element={<Forms />} />
         <Route path="/discussion" element={<Discussion />} />

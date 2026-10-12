@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { api, tokens } from "../api.js";
 import Icon from "../icons.jsx";
 import { Button, Field } from "./ui.jsx";
+import GroupSection from "./GroupSection.jsx";
+import { checkSection } from "../sections.js";
 
 const NETWORK_MSG = "Can't reach the server. Check your connection and try again.";
 const friendly = (ex) => (ex instanceof TypeError ? NETWORK_MSG : ex.message);
 
 export default function Auth({ onDone }) {
   const [mode, setMode] = useState("login"); // login | register | verify
-  const [f, setF] = useState({ identifier: "", password: "", name: "", email: "", roll_no: "", group: "" });
+  const [f, setF] = useState({ identifier: "", password: "", name: "", email: "", roll_no: "", group: "", section: "" });
   const [groups, setGroups] = useState([]);
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
@@ -50,7 +52,10 @@ export default function Auth({ onDone }) {
     e.preventDefault(); setErr(""); setInfo(""); setBusy(true);
     try {
       if (register) {
-        const body = { name: f.name, email: f.email, password: f.password, roll_no: f.roll_no, group: f.group || null };
+        const gname = groups.find((g) => String(g.id) === String(f.group))?.name;
+        const bad = checkSection(gname, f.section);
+        if (bad) { setErr(bad); setBusy(false); return; }
+        const body = { name: f.name, email: f.email, password: f.password, roll_no: f.roll_no, group: f.group || null, section: f.section };
         const res = await api("/auth/register/", { method: "POST", body, auth: false });
         enterVerify(res);
       } else {
@@ -158,12 +163,7 @@ export default function Auth({ onDone }) {
 
           {register && (<>
             <Field label="Roll number (optional)" htmlFor="roll_no"><input id="roll_no" value={f.roll_no} onChange={set("roll_no")} /></Field>
-            <Field label="Lab group (optional)" htmlFor="group">
-              <select id="group" value={f.group} onChange={set("group")}>
-                <option value="">Not sure yet</option>
-                {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
-            </Field>
+            <GroupSection groups={groups} group={f.group} section={f.section} onChange={(v) => setF((s) => ({ ...s, ...v }))} />
           </>)}
 
           {infoBox}{errBox}

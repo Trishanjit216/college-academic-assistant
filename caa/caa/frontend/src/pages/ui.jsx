@@ -196,3 +196,39 @@ export function ListPage({ title, description, path, searchable = true, filters,
     </div>
   );
 }
+
+
+/* ---------- links ---------- */
+/** Returns the URL if it is a real http(s) link, otherwise "". Blocks javascript:, data: and the like. */
+export function safeUrl(value) {
+  try {
+    const u = new URL(String(value || "").trim());
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : "";
+  } catch { return ""; }
+}
+
+const URL_RE = /((?:https?:\/\/|www\.)[^\s<>"']+)/gi;
+
+/** Plain text in which every web address becomes a real, safe link (opens in a new tab). */
+export function Linkify({ text }) {
+  if (!text) return null;
+  return String(text).split(URL_RE).map((part, i) => {
+    if (i % 2 === 0) return part;
+    const trail = (part.match(/[.,;:!?)\]]+$/) || [""])[0];
+    const raw = trail ? part.slice(0, -trail.length) : part;
+    const href = safeUrl(/^www\./i.test(raw) ? `https://${raw}` : raw);
+    if (!href) return part;
+    return <span key={i}><a className="text-link" href={href} target="_blank" rel="noopener noreferrer">{raw}</a>{trail}</span>;
+  });
+}
+
+/** A link-styled button for an external address; renders nothing for a missing or invalid URL. */
+export function ExternalButton({ href, children, variant = "secondary", size = "sm" }) {
+  const url = safeUrl(href);
+  if (!url) return null;
+  return (
+    <a className={`btn btn-${variant} btn-${size}`} href={url} target="_blank" rel="noopener noreferrer">
+      {children}<Icon name="external" size={16} />
+    </a>
+  );
+}

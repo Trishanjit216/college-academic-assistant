@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import Icon from "../icons.jsx";
+import { FACULTY_URL } from "../Layout.jsx";
 import { Badge, EmptyState, ErrorState, Section, Skeleton, dueInfo, fmtDT } from "./ui.jsx";
 
 const greeting = () => {
@@ -14,10 +15,13 @@ const EXPLORE = [
     { to: "/records", icon: "classes", name: "Class records", text: "See what was taught in each period." },
     { to: "/labs", icon: "labs", name: "Lab tracker", text: "Experiments allotted to your group." },
     { to: "/assignments", icon: "assignments", name: "Assignments", text: "Deadlines and submission details." },
+    { to: "/syllabus", icon: "syllabus", name: "Academic syllabus", text: "Mid-term and end-semester syllabus by subject." },
+    { to: "/seats", icon: "seat", name: "Exam seat allotment", text: "Find your room and seat for each exam." },
   ] },
   { title: "Campus", items: [
     { to: "/events", icon: "events", name: "Events calendar", text: "Dates, venues and registration." },
     { to: "/forms", icon: "forms", name: "Form and document guide", text: "Documents, formats and sizes for each form." },
+    ...(FACULTY_URL ? [{ href: FACULTY_URL, icon: "user", name: "Know Your Faculty", text: "Meet your faculty. Opens in a new tab." }] : []),
   ] },
   { title: "Community", items: [
     { to: "/discussion", icon: "discussion", name: "Anonymous discussion", text: "Raise concerns without sharing your name." },
@@ -144,7 +148,12 @@ export default function Dashboard({ user }) {
           <div className="explore-group" key={g.title}>
             <h3>{g.title}</h3>
             <div className="feature-grid">
-              {g.items.map((it) => (
+              {g.items.map((it) => it.href ? (
+                <a key={it.name} href={it.href} target="_blank" rel="noopener noreferrer" className="card card-hover feature">
+                  <span className="stat-icon"><Icon name={it.icon} size={20} /></span>
+                  <div><h3>{it.name}</h3><p>{it.text}</p></div>
+                </a>
+              ) : (
                 <Link key={it.to} to={it.to} className="card card-hover feature">
                   <span className="stat-icon"><Icon name={it.icon} size={20} /></span>
                   <div><h3>{it.name}</h3><p>{it.text}</p></div>

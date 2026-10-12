@@ -15,6 +15,7 @@ router.register("forms", v.FormGuideViewSet)
 router.register("notifications", v.NotificationViewSet, basename="notification")
 router.register("posts", v.PostViewSet, basename="post")
 router.register("reports", v.ReportViewSet)
+router.register("syllabus", v.SyllabusViewSet)
 
 urlpatterns = [
     path("auth/token/", v.ThrottledTokenView.as_view()),
@@ -23,6 +24,8 @@ urlpatterns = [
     path("auth/verify-otp/", v.VerifyOtpView.as_view()),
     path("auth/resend-otp/", v.ResendOtpView.as_view()),
     path("auth/me/", v.MeView.as_view()),
+    path("seats/lookup/", v.SeatLookupView.as_view()),
+    path("seats/import/", v.SeatImportView.as_view()),
     path("groups/", v.GroupList.as_view()),
     path("dashboard/", v.DashboardView.as_view()),
     path("cron/send-reminders/", v.CronReminderView.as_view()),
