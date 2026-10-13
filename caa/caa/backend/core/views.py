@@ -456,11 +456,17 @@ class ExamStudentViewSet(viewsets.ReadOnlyModelViewSet):
     """Published exams only. Students never receive the allotment rows, only their own result."""
     serializer_class = s.ExamPublicSerializer
     pagination_class = None
+    throttle_scope = None
+
+    def get_throttles(self):
+        if self.action == "lookup":
+            self.throttle_scope = "seats"      # seat searches are rate-limited
+        return super().get_throttles()
 
     def get_queryset(self):
         return Exam.objects.filter(status=Exam.PUBLISHED)
 
-    @action(detail=True, methods=["get"], throttle_scope="seats")
+    @action(detail=True, methods=["get"])
     def lookup(self, request, pk=None):
         exam = self.get_object()
         user = request.user
