@@ -232,24 +232,61 @@ class SyllabusEntry(models.Model):
         return f"{self.subject.code} {self.get_exam_display()}"
 
 
-class SeatAllotment(models.Model):
-    """One student's seat for one exam. Only ever filled from data supplied by an authorised source."""
-    roll_no = models.CharField(max_length=30, db_index=True, help_text="Stored upper-case, no spaces")
-    student_name = models.CharField(max_length=150, blank=True)
-    exam_name = models.CharField(max_length=150)
+class Exam(models.Model):
+    """One examination whose official seat allotment CAA publishes. Never filled automatically."""
+    DRAFT, PUBLISHED = "draft", "published"
+    STATUS = [(DRAFT, "Draft (hidden from students)"), (PUBLISHED, "Published")]
+    name = models.CharField(max_length=150)
+    semester = models.PositiveSmallIntegerField(null=True, blank=True)
+    academic_year = models.CharField(max_length=20, blank=True, help_text="e.g. 2026-27")
+    batch = models.CharField(max_length=60, blank=True, help_text="e.g. B.Tech 2026 batch")
     exam_date = models.DateField(null=True, blank=True)
-    room = models.CharField(max_length=60)
-    seat = models.CharField(max_length=30)
-    instructions = models.CharField(max_length=500, blank=True)
+    instructions = models.TextField(blank=True, help_text="Shown to students with their result")
+    status = models.CharField(max_length=10, choices=STATUS, default=DRAFT)
+    published_at = models.DateTimeField(null=True, blank=True)
+    published_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [("roll_no", "exam_name", "exam_date")]
-        ordering = ["exam_date", "exam_name"]
-
-    def save(self, *args, **kwargs):
-        self.roll_no = "".join(self.roll_no.split()).upper()
-        super().save(*args, **kwargs)
+        ordering = ["-exam_date", "-created_at"]
 
     def __str__(self):
-        return f"{self.roll_no} {self.exam_name}"
+        return self.name
+
+
+class ExamDocument(models.Model):
+    """The official PDF, stored in the database so it survives redeploys (free hosting has no permanent disk)."""
+    exam = models.OneToOneField(Exam, on_delete=models.CASCADE, related_name="document")
+    filename = models.CharField(max_length=200)
+    size = models.PositiveIntegerField(default=0)
+    data = models.BinaryField()
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    uploaded_at = models.DateTimeField(auto_now=True)
+
+
+class ExamManager(models.Model):
+    """A faculty member explicitly permitted to manage one exam (admins manage all exams)."""
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE, related_name="managers")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="managed_exams")
+
+    class Meta:
+        unique_together = [("exam", "user")]
+
+
+class AllotmentRow(models.Model):
+    """roll_to empty = one roll number (an exception wins over ranges); roll_to filled = a range. See core/allotment.py."""
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE, related_name="rows")
+    section = models.CharField(max_length=10, blank=True)
+    roll_from = models.CharField(max_length=30)
+    roll_to = models.CharField(max_length=30, blank=True)
+    room = models.CharField(max_length=60)
+    seat = models.CharField(max_length=30, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["section", "roll_from"]
+
+

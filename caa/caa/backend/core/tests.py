@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .management.commands.send_reminders import send_due_reminders
-from .models import Assignment, Group, Notification, Post, SeatAllotment, Subject, SyllabusEntry, User
+from .models import AllotmentRow, Assignment, AttendanceRecord, Exam, ExamManager, Group, Notification, Post, Subject, SyllabusEntry, User
 
 
 class AuthAndPermissionTests(APITestCase):
@@ -264,62 +264,140 @@ class SectionTests(APITestCase):
             dup.clean()
 
 
-class SyllabusAndSeatTests(APITestCase):
+class SyllabusTests(APITestCase):
     def setUp(self):
-        self.stu = User.objects.create_user("stu", password="pw-12345-x", roll_no="21CS001")
-        self.other = User.objects.create_user("o", password="pw-12345-x")
+        self.stu = User.objects.create_user("stu", password="pw-12345-x")
         self.fac = User.objects.create_user("fac", password="pw-12345-x", role="faculty")
-        self.adm = User.objects.create_user("adm", password="pw-12345-x", role="admin")
         self.sub = Subject.objects.create(code="MA101", name="Maths")
-        SeatAllotment.objects.create(roll_no="21CS001", exam_name="Mid-Term 1", room="R1", seat="4")
-        SeatAllotment.objects.create(roll_no="21CS002", exam_name="Mid-Term 1", room="R1", seat="5")
 
-    def test_syllabus_read_for_students_write_for_editors(self):
+    def test_read_for_students_write_for_editors(self):
         SyllabusEntry.objects.create(subject=self.sub, exam="mid1", semester=1, content="Unit 1: Limits")
         self.client.force_authenticate(self.stu)
-        r = self.client.get("/api/syllabus/")
-        self.assertEqual(r.status_code, 200); self.assertEqual(r.data[0]["subject_code"], "MA101")
+        self.assertEqual(self.client.get("/api/syllabus/").data[0]["subject_code"], "MA101")
         self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 403)
         self.client.force_authenticate(self.fac)
         self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 201)
 
-    def test_syllabus_requires_login(self):
+    def test_requires_login(self):
         self.assertEqual(self.client.get("/api/syllabus/").status_code, 401)
-
-    def test_student_sees_only_own_seat(self):
-        self.client.force_authenticate(self.stu)
-        r = self.client.get("/api/seats/lookup/")
-        self.assertEqual(r.status_code, 200); self.assertEqual(len(r.data["results"]), 1)
-        self.assertEqual(r.data["results"][0]["seat"], "4")
-        self.assertEqual(self.client.get("/api/seats/lookup/?roll_no=21cs001").status_code, 200)
-        self.assertEqual(self.client.get("/api/seats/lookup/?roll_no=21CS002").status_code, 403)
-
-    def test_student_without_roll_no_and_anonymous(self):
-        self.client.force_authenticate(self.other)
-        self.assertEqual(self.client.get("/api/seats/lookup/").data["code"], "no_roll_no")
-        self.client.force_authenticate(None)
-        self.assertEqual(self.client.get("/api/seats/lookup/").status_code, 401)
-
-    def test_staff_can_look_up_any_roll_but_no_listing_exists(self):
-        self.client.force_authenticate(self.fac)
-        self.assertEqual(len(self.client.get("/api/seats/lookup/?roll_no=21CS002").data["results"]), 1)
-        self.assertEqual(self.client.get("/api/seats/lookup/").status_code, 400)
-        self.assertEqual(self.client.get("/api/seats/").status_code, 404)
-
-    def test_import_admin_only_dry_run_then_commit(self):
-        csv_text = "roll_no,exam_name,room,seat\n21CS003,Mid-Term 1,R2,9\n,Mid-Term 1,R2,10\n"
-        self.client.force_authenticate(self.fac)
-        self.assertEqual(self.client.post("/api/seats/import/", {"csv": csv_text}, format="json").status_code, 403)
-        self.client.force_authenticate(self.adm)
-        r = self.client.post("/api/seats/import/", {"csv": csv_text, "dry_run": True}, format="json")
-        self.assertEqual((r.data["valid_rows"], r.data["error_count"]), (1, 1))
-        self.assertFalse(SeatAllotment.objects.filter(roll_no="21CS003").exists())
-        r = self.client.post("/api/seats/import/", {"csv": csv_text, "dry_run": False}, format="json")
-        self.assertEqual(r.data["created"], 1)
-        self.assertTrue(SeatAllotment.objects.filter(roll_no="21CS003").exists())
-        r = self.client.post("/api/seats/import/", {"csv": "bad,header\n1,2", "dry_run": False}, format="json")
-        self.assertEqual(r.status_code, 400)
 
     def test_ensure_schema_is_a_noop_when_up_to_date(self):
         from .schema_sync import ensure_schema
         self.assertEqual(ensure_schema(), [])
+
+
+class ExamAllotmentTests(APITestCase):
+    PDF = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"
+
+    def setUp(self):
+        self.adm = User.objects.create_user("adm", password="pw-12345-x", role="admin")
+        self.fac = User.objects.create_user("fac", password="pw-12345-x", role="faculty")
+        self.fac2 = User.objects.create_user("fac2", password="pw-12345-x", role="faculty")
+        self.stu = User.objects.create_user("stu", password="pw-12345-x", roll_no="21CS017", section="A1")
+        self.stu2 = User.objects.create_user("stu2", password="pw-12345-x", roll_no="21CS005", section="A1")
+        self.nor = User.objects.create_user("nor", password="pw-12345-x")
+        self.exam = Exam.objects.create(name="Term-I", semester=1)
+        self.other = Exam.objects.create(name="Term-II")
+        ExamManager.objects.create(exam=self.exam, user=self.fac)
+        AllotmentRow.objects.create(exam=self.exam, roll_from="21CS001", roll_to="21CS060", room="Room 204")
+        AllotmentRow.objects.create(exam=self.exam, roll_from="21CS017", room="Room 301", seat="B4", note="Special")
+
+    def test_draft_is_invisible_to_students_until_published(self):
+        self.client.force_authenticate(self.stu)
+        self.assertEqual(self.client.get("/api/exams/").data, [])
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/lookup/").status_code, 404)
+        self.client.force_authenticate(self.adm)
+        self.assertEqual(self.client.post(f"/api/manage/exams/{self.exam.id}/publish/").status_code, 200)
+        self.client.force_authenticate(self.stu)
+        self.assertEqual(len(self.client.get("/api/exams/").data), 1)
+        r = self.client.get(f"/api/exams/{self.exam.id}/lookup/")
+        self.assertEqual((r.data["found"], r.data["result"]["room"], r.data["result"]["seat"]), (True, "Room 301", "B4"))   # exception wins
+        self.client.force_authenticate(self.stu2)
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/lookup/").data["result"]["room"], "Room 204")
+
+    def test_student_cannot_look_up_someone_else_or_see_rows(self):
+        self.exam.status = "published"; self.exam.save()
+        self.client.force_authenticate(self.stu)
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/lookup/?roll_no=21CS005").status_code, 403)
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/lookup/?roll_no=21cs017").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/rows/").status_code, 404)
+        self.assertEqual(self.client.get("/api/manage/exams/").status_code, 403)
+        self.client.force_authenticate(self.nor)
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/lookup/").data["code"], "no_roll_no")
+
+    def test_no_match_is_reported_honestly(self):
+        self.exam.status = "published"; self.exam.save()
+        u = User.objects.create_user("x", password="pw-12345-x", roll_no="99ZZ999")
+        self.client.force_authenticate(u)
+        r = self.client.get(f"/api/exams/{self.exam.id}/lookup/")
+        self.assertEqual((r.data["found"], r.data["result"]), (False, None))
+
+    def test_faculty_only_manage_assigned_exams(self):
+        self.client.force_authenticate(self.fac)
+        self.assertEqual([e["id"] for e in self.client.get("/api/manage/exams/").data], [self.exam.id])
+        self.assertEqual(self.client.get(f"/api/manage/exams/{self.other.id}/").status_code, 404)
+        self.assertEqual(self.client.post(f"/api/manage/exams/{self.other.id}/publish/").status_code, 404)
+        self.assertEqual(self.client.post("/api/manage/exams/", {"name": "New"}).status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/manage/exams/{self.exam.id}/").status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/manage/exams/{self.exam.id}/", {"batch": "2026"}).status_code, 200)
+        self.client.force_authenticate(self.fac2)
+        self.assertEqual(self.client.get("/api/manage/exams/").data, [])
+        self.assertEqual(self.client.patch(f"/api/manage/exams/{self.exam.id}/", {"batch": "x"}).status_code, 404)
+
+    def test_status_cannot_be_forced_through_edit(self):
+        self.client.force_authenticate(self.adm)
+        self.client.patch(f"/api/manage/exams/{self.exam.id}/", {"status": "published"})
+        self.exam.refresh_from_db(); self.assertEqual(self.exam.status, "draft")
+
+    def test_publish_blocked_when_empty_or_conflicting(self):
+        self.client.force_authenticate(self.adm)
+        self.assertEqual(self.client.post(f"/api/manage/exams/{self.other.id}/publish/").status_code, 400)
+        self.client.post(f"/api/manage/exams/{self.exam.id}/rows/", {"roll_from": "21CS050", "roll_to": "21CS070", "room": "Room 999"})
+        r = self.client.post(f"/api/manage/exams/{self.exam.id}/publish/")
+        self.assertEqual(r.status_code, 400); self.assertTrue(r.data["conflicts"])
+        self.exam.refresh_from_db(); self.assertEqual(self.exam.status, "draft")
+
+    def test_row_edit_delete_and_validation(self):
+        self.client.force_authenticate(self.fac)
+        row = self.exam.rows.first()
+        self.assertEqual(self.client.patch(f"/api/manage/rows/{row.id}/", {"room": "Room 1"}).status_code, 200)
+        self.assertEqual(self.client.patch(f"/api/manage/rows/{row.id}/", {"roll_to": "21CS000"}).status_code, 400)
+        foreign = AllotmentRow.objects.create(exam=self.other, roll_from="1", room="R")
+        self.assertEqual(self.client.patch(f"/api/manage/rows/{foreign.id}/", {"room": "X"}).status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/manage/rows/{foreign.id}/").status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/manage/rows/{row.id}/").status_code, 204)
+        self.client.force_authenticate(self.stu)
+        self.assertEqual(self.client.delete(f"/api/manage/rows/{self.exam.rows.first().id}/").status_code, 403)
+
+    def test_csv_import_dry_run_then_commit_and_replace(self):
+        self.client.force_authenticate(self.fac)
+        csv_text = "roll_no,roll_to,room\n21CS061,21CS090,Room 205\n,,Room 9\n"
+        r = self.client.post(f"/api/manage/exams/{self.exam.id}/import-csv/", {"csv": csv_text}, format="json")
+        self.assertEqual((r.data["valid_rows"], r.data["error_count"], self.exam.rows.count()), (1, 1, 2))
+        self.client.post(f"/api/manage/exams/{self.exam.id}/import-csv/", {"csv": csv_text, "dry_run": False}, format="json")
+        self.assertEqual(self.exam.rows.count(), 3)
+        self.client.post(f"/api/manage/exams/{self.exam.id}/import-csv/", {"csv": csv_text, "dry_run": False, "replace": True}, format="json")
+        self.assertEqual(self.exam.rows.count(), 1)
+        self.assertEqual(self.client.post(f"/api/manage/exams/{self.exam.id}/import-csv/", {"csv": "x,y\n1,2"}, format="json").status_code, 400)
+
+    def test_pdf_upload_validation_view_and_visibility(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_authenticate(self.fac)
+        bad = SimpleUploadedFile("x.pdf", b"not a pdf")
+        self.assertEqual(self.client.post(f"/api/manage/exams/{self.exam.id}/document/", {"file": bad}, format="multipart").status_code, 400)
+        ok = SimpleUploadedFile("../notice 1.pdf", self.PDF)
+        r = self.client.post(f"/api/manage/exams/{self.exam.id}/document/", {"file": ok}, format="multipart")
+        self.assertEqual(r.status_code, 200); self.assertTrue(r.data["has_document"]); self.assertNotIn("/", r.data["document_name"])
+        self.client.force_authenticate(self.stu)
+        self.assertEqual(self.client.get(f"/api/exams/{self.exam.id}/document/").status_code, 404)   # draft
+        self.exam.status = "published"; self.exam.save()
+        r = self.client.get(f"/api/exams/{self.exam.id}/document/")
+        self.assertEqual((r.status_code, r["Content-Type"]), (200, "application/pdf"))
+        self.assertTrue(r.content.startswith(b"%PDF-"))
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(self.client.post(f"/api/manage/exams/{self.exam.id}/extract/").status_code, 422)   # not real text
+
+    def test_manage_requires_auth(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get("/api/manage/exams/").status_code, 401)
+        self.assertEqual(self.client.get("/api/exams/").status_code, 401)

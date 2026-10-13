@@ -7,12 +7,19 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
+import csv
+import io
+import re
+
 from django.core.cache import caches
+from django.http import HttpResponse
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework import filters, generics, status, viewsets
+from rest_framework import filters, generics, mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework import permissions
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,10 +27,10 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from . import serializers as s
-from .models import (Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, Report, SeatAllotment, Subject,
+from .models import (AllotmentRow, Exam, ExamDocument, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
+                     FormGuide, Group, Lab, Notification, Post, Report, Subject,
                      SyllabusEntry)
-from . import otp, seat_import
+from . import allotment, otp, pdf_extract
 from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import IsModerator, ReadAllEditorsWrite
 
@@ -424,52 +431,229 @@ class SyllabusViewSet(BaseViewSet):
     pagination_class = None
 
 
-class SeatLookupView(APIView):
-    """GET /api/seats/lookup/?roll_no=...
-    Students only ever get THEIR OWN seat (roll number from their profile). Faculty/admin can look up any roll
-    number. There is no endpoint that lists the whole allotment."""
-    throttle_scope = "seats"
+# =====================================================================
+#  Exam seat allotment (institute-managed, official data only)
+# =====================================================================
+MAX_PDF_BYTES = 8 * 1024 * 1024
 
-    def get(self, request):
+
+def _is_admin(u):
+    return bool(u.is_authenticated and (u.is_superuser or u.role == User.ADMIN))
+
+
+def _can_manage(u, exam):
+    """Admins manage every exam; faculty only exams they were explicitly assigned to."""
+    if _is_admin(u):
+        return True
+    return bool(u.is_authenticated and u.role == User.FACULTY and ExamManager.objects.filter(exam=exam, user=u).exists())
+
+
+def _row_dicts(exam):
+    return list(exam.rows.values("id", "section", "roll_from", "roll_to", "room", "seat", "note"))
+
+
+class ExamStudentViewSet(viewsets.ReadOnlyModelViewSet):
+    """Published exams only. Students never receive the allotment rows, only their own result."""
+    serializer_class = s.ExamPublicSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return Exam.objects.filter(status=Exam.PUBLISHED)
+
+    @action(detail=True, methods=["get"], throttle_scope="seats")
+    def lookup(self, request, pk=None):
+        exam = self.get_object()
         user = request.user
-        asked = seat_import.normalize_roll(request.query_params.get("roll_no"))
-        mine = seat_import.normalize_roll(user.roll_no)
-        if user.is_editor:
-            roll = asked or mine
+        staff = _can_manage(user, exam)        # admins, or faculty assigned to this exam; everyone else sees only their own seat
+        asked = allotment.norm(request.query_params.get("roll_no"))
+        mine = allotment.norm(user.roll_no)
+        if staff:
+            roll, section = asked or mine, allotment.norm(request.query_params.get("section")) or (user.section if not asked else "")
         else:
             if not mine:
-                return Response({"detail": "Add your roll number to your profile to see your seat.",
-                                 "code": "no_roll_no"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Add your roll number to your profile to see your seat.", "code": "no_roll_no"}, status=400)
             if asked and asked != mine:
-                return Response({"detail": "You can only view your own seat allotment.", "code": "forbidden"},
-                                status=status.HTTP_403_FORBIDDEN)
-            roll = mine
+                return Response({"detail": "You can only view your own seat allotment.", "code": "forbidden"}, status=403)
+            roll, section = mine, user.section
         if not roll:
             return Response({"detail": "Enter a roll number.", "code": "no_roll_no"}, status=400)
-        rows = SeatAllotment.objects.filter(roll_no=roll)
-        return Response({"roll_no": roll, "published": SeatAllotment.objects.exists(),
-                         "results": s.SeatSerializer(rows, many=True).data})
+        match = allotment.resolve(roll, section, _row_dicts(exam))
+        res = ({"room": match["room"], "seat": match["seat"], "note": match["note"], "kind": match["kind"],
+                "section": match["section"]} if match else None)
+        return Response({"exam": s.ExamPublicSerializer(exam).data, "roll_no": roll, "found": bool(match), "result": res})
+
+    @action(detail=True, methods=["get"])
+    def document(self, request, pk=None):
+        exam = self.get_object()
+        doc = ExamDocument.objects.filter(exam=exam).first()
+        if not doc:
+            return Response({"detail": "No document has been uploaded."}, status=404)
+        resp = HttpResponse(bytes(doc.data), content_type="application/pdf")
+        resp["Content-Disposition"] = f'inline; filename="{doc.filename}"'
+        resp["X-Content-Type-Options"] = "nosniff"
+        return resp
 
 
-class SeatImportView(APIView):
-    """POST /api/seats/import/  {"csv": "...", "dry_run": true|false}  (administrators only)."""
-    def post(self, request):
+class IsExamStaff(permissions.BasePermission):
+    def has_permission(self, request, view):
         u = request.user
-        if not (u.is_superuser or u.role == User.ADMIN):
-            return Response({"detail": "Only administrators can import seat allotments."}, status=403)
+        return bool(u and u.is_authenticated and (_is_admin(u) or u.role == User.FACULTY))
+
+
+def _rows_response(exam, request, *, extra=None):
+    return Response({**(extra or {}), "rows": s.AllotmentRowSerializer(exam.rows.all(), many=True).data,
+                     "conflicts": allotment.find_conflicts(_row_dicts(exam))})
+
+
+class ExamManageViewSet(viewsets.ModelViewSet):
+    """Management API used by the CAA app. Admin: all exams. Faculty: only exams assigned to them."""
+    serializer_class = s.ExamManageSerializer
+    permission_classes = [IsExamStaff]
+    pagination_class = None
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        u = self.request.user
+        qs = Exam.objects.all()
+        return qs if _is_admin(u) else qs.filter(managers__user=u).distinct()
+
+    def create(self, request, *args, **kwargs):
+        if not _is_admin(request.user):
+            return Response({"detail": "Only administrators can create an examination."}, status=403)
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        if not _is_admin(request.user):
+            return Response({"detail": "Only administrators can delete an examination."}, status=403)
+        return super().destroy(request, *args, **kwargs)
+
+    # ---- document ----
+    @action(detail=True, methods=["post", "delete"], url_path="document")
+    def document(self, request, pk=None):
+        exam = self.get_object()
+        if request.method == "DELETE":
+            ExamDocument.objects.filter(exam=exam).delete()
+            return Response(status=204)
+        f = request.FILES.get("file")
+        if not f:
+            return Response({"detail": "Choose a PDF file."}, status=400)
+        if f.size > MAX_PDF_BYTES:
+            return Response({"detail": "That PDF is too large (limit 8 MB)."}, status=400)
+        data = f.read()
+        if not data.startswith(b"%PDF-"):
+            return Response({"detail": "That file is not a PDF."}, status=400)
+        name = re.sub(r"[^A-Za-z0-9._ -]", "_", (f.name or "official-notice.pdf").rsplit("/", 1)[-1])[:150] or "official-notice.pdf"
+        if not name.lower().endswith(".pdf"):
+            name += ".pdf"
+        ExamDocument.objects.update_or_create(exam=exam, defaults={"filename": name, "size": len(data), "data": data,
+                                                                   "uploaded_by": request.user})
+        return Response(s.ExamManageSerializer(exam).data)
+
+    @action(detail=True, methods=["post"])
+    def extract(self, request, pk=None):
+        """SUGGESTS rows from the uploaded PDF. Nothing is saved and nothing is published."""
+        exam = self.get_object()
+        doc = ExamDocument.objects.filter(exam=exam).first()
+        if not doc:
+            return Response({"detail": "Upload the official PDF first."}, status=400)
         try:
-            rows, errors = seat_import.parse_csv(request.data.get("csv"))
-        except seat_import.ImportProblem as e:
+            text = pdf_extract.extract_text(bytes(doc.data))
+        except pdf_extract.ExtractionUnavailable as e:
+            return Response({"detail": str(e), "code": "extract_unavailable"}, status=422)
+        out = pdf_extract.suggest_rows(text)
+        if not out["text_found"]:
+            return Response({"detail": "No text was found in this PDF. It is probably a scan, and automatic reading (OCR) is not "
+                                       "available. Use CSV import or enter the rows by hand.", "code": "scanned"}, status=422)
+        return Response(out)
+
+    # ---- rows ----
+    @action(detail=True, methods=["get", "post"], url_path="rows")
+    def rows(self, request, pk=None):
+        exam = self.get_object()
+        if request.method == "GET":
+            return _rows_response(exam, request)
+        ser = s.AllotmentRowSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        AllotmentRow.objects.create(exam=exam, **ser.validated_data)
+        return _rows_response(exam, request)
+
+    @action(detail=True, methods=["post"], url_path="add-rows")
+    def add_rows(self, request, pk=None):
+        """Save a reviewed list of rows (for example the reviewed PDF suggestions). Invalid rows are skipped and reported."""
+        exam = self.get_object()
+        raw = request.data.get("rows")
+        if not isinstance(raw, list) or not raw or len(raw) > allotment.MAX_ROWS:
+            return Response({"detail": "Send a list of rows."}, status=400)
+        good, errors = [], []
+        for n, r in enumerate(raw, 1):
+            ser = s.AllotmentRowSerializer(data=r if isinstance(r, dict) else {})
+            if ser.is_valid():
+                good.append(ser.validated_data)
+            else:
+                errors.append({"row": n, "error": " ".join(str(m) for v in ser.errors.values() for m in ([v] if isinstance(v, str) else v))})
+        with transaction.atomic():
+            AllotmentRow.objects.bulk_create([AllotmentRow(exam=exam, **g) for g in good])
+        return _rows_response(exam, request, extra={"added": len(good), "errors": errors[:50], "error_count": len(errors)})
+
+    @action(detail=True, methods=["post"], url_path="import-csv")
+    def import_csv(self, request, pk=None):
+        exam = self.get_object()
+        try:
+            rows, errors = allotment.parse_csv(request.data.get("csv"))
+        except allotment.ImportProblem as e:
             return Response({"detail": str(e), "code": "invalid_file"}, status=400)
         dry = bool(request.data.get("dry_run", True))
-        created = updated = 0
+        replace = bool(request.data.get("replace", False))
+        preview_conflicts = allotment.find_conflicts(([] if replace else _row_dicts(exam)) + rows)
         if not dry and rows:
             with transaction.atomic():
-                for r in rows:
-                    key = {k: r[k] for k in ("roll_no", "exam_name", "exam_date")}
-                    _, made = SeatAllotment.objects.update_or_create(
-                        **key, defaults={k: r[k] for k in ("room", "seat", "student_name", "instructions")})
-                    created += made
-                    updated += not made
-        return Response({"dry_run": dry, "valid_rows": len(rows), "created": created, "updated": updated,
-                         "error_count": len(errors), "errors": errors[:50]})
+                if replace:
+                    exam.rows.all().delete()
+                AllotmentRow.objects.bulk_create([AllotmentRow(exam=exam, **r) for r in rows])
+        return Response({"dry_run": dry, "valid_rows": len(rows), "error_count": len(errors), "errors": errors[:50],
+                         "conflicts": preview_conflicts[:50], "sample": rows[:5]})
+
+    # ---- publish ----
+    @action(detail=True, methods=["post"])
+    def publish(self, request, pk=None):
+        exam = self.get_object()
+        rows = _row_dicts(exam)
+        if not rows:
+            return Response({"detail": "Add the allotment rows before publishing."}, status=400)
+        problems = allotment.find_conflicts(rows)
+        if problems:
+            return Response({"detail": "Fix these problems before publishing: " + "; ".join(problems[:5]), "conflicts": problems}, status=400)
+        exam.status, exam.published_at, exam.published_by = Exam.PUBLISHED, timezone.now(), request.user
+        exam.save(update_fields=["status", "published_at", "published_by", "updated_at"])
+        return Response(s.ExamManageSerializer(exam).data)
+
+    @action(detail=True, methods=["post"])
+    def unpublish(self, request, pk=None):
+        exam = self.get_object()
+        exam.status = Exam.DRAFT
+        exam.save(update_fields=["status", "updated_at"])
+        return Response(s.ExamManageSerializer(exam).data)
+
+    @action(detail=True, methods=["get"], url_path="preview")
+    def preview(self, request, pk=None):
+        """Look up a roll number exactly as a student would see it, even while the exam is still a draft."""
+        exam = self.get_object()
+        roll, section = allotment.norm(request.query_params.get("roll_no")), allotment.norm(request.query_params.get("section"))
+        if not roll:
+            return Response({"detail": "Enter a roll number."}, status=400)
+        m = allotment.resolve(roll, section, _row_dicts(exam))
+        return Response({"roll_no": roll, "found": bool(m), "result": ({k: m[k] for k in ("room", "seat", "note", "kind", "section")} if m else None)})
+
+
+class AllotmentRowViewSet(mixins.UpdateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    serializer_class = s.AllotmentRowSerializer
+    permission_classes = [IsExamStaff]
+    http_method_names = ["patch", "delete", "options"]
+
+    def get_queryset(self):
+        u = self.request.user
+        qs = AllotmentRow.objects.all()
+        return qs if _is_admin(u) else qs.filter(exam__managers__user=u)

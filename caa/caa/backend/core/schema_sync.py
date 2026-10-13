@@ -6,7 +6,9 @@ database treats the regenerated 0001 as applied, so models/columns added later w
 nothing on a database that is already up to date (including a fresh one built by `migrate`)."""
 from django.db import connection
 
-from .models import SeatAllotment, SyllabusEntry, User
+from .models import AllotmentRow, Exam, ExamDocument, ExamManager, SyllabusEntry, User
+
+NEW_MODELS = (SyllabusEntry, Exam, ExamDocument, ExamManager, AllotmentRow)   # order matters (FKs)
 
 
 def ensure_schema():
@@ -14,7 +16,7 @@ def ensure_schema():
     with connection.cursor() as cur:
         tables = set(connection.introspection.table_names(cur))
         cols = {c.name for c in connection.introspection.get_table_description(cur, User._meta.db_table)}
-    missing = [m for m in (SyllabusEntry, SeatAllotment) if m._meta.db_table not in tables]
+    missing = [m for m in NEW_MODELS if m._meta.db_table not in tables]
     need_section = "section" not in cols
     if not missing and not need_section:
         return done                      # already up to date: don't even open a schema editor

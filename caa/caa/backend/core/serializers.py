@@ -1,10 +1,11 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from rest_framework import serializers
 
-from . import sections
-from .models import (Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab, SeatAllotment, SyllabusEntry,
+from . import allotment, sections
+from .models import (AllotmentRow, Exam, ExamDocument, Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab, SyllabusEntry,
                      Notification, Post, Report, Subject)
 
 User = get_user_model()
@@ -227,7 +228,60 @@ class SyllabusEntrySerializer(serializers.ModelSerializer):
         read_only_fields = ["updated_at"]
 
 
-class SeatSerializer(serializers.ModelSerializer):
+class ExamPublicSerializer(serializers.ModelSerializer):
+    """What a student may see about a PUBLISHED exam (never the allotment rows)."""
+    has_document = serializers.SerializerMethodField()
+
     class Meta:
-        model = SeatAllotment
-        fields = ["roll_no", "student_name", "exam_name", "exam_date", "room", "seat", "instructions"]
+        model = Exam
+        fields = ["id", "name", "semester", "academic_year", "batch", "exam_date", "instructions", "published_at", "has_document"]
+
+    def get_has_document(self, obj):
+        return ExamDocument.objects.filter(exam_id=obj.id).exists()
+
+
+class ExamManageSerializer(serializers.ModelSerializer):
+    has_document = serializers.SerializerMethodField()
+    document_name = serializers.SerializerMethodField()
+    row_count = serializers.SerializerMethodField()
+    managers = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Exam
+        fields = ["id", "name", "semester", "academic_year", "batch", "exam_date", "instructions", "status", "published_at",
+                  "updated_at", "has_document", "document_name", "row_count", "managers"]
+        read_only_fields = ["status", "published_at", "updated_at"]
+
+    def _doc(self, obj):
+        return ExamDocument.objects.filter(exam_id=obj.id).values("filename", "size", "uploaded_at").first()
+
+    def get_has_document(self, obj):
+        return self._doc(obj) is not None
+
+    def get_document_name(self, obj):
+        d = self._doc(obj)
+        return d["filename"] if d else ""
+
+    def get_row_count(self, obj):
+        return obj.rows.count()
+
+    def get_managers(self, obj):
+        return [m.user.get_full_name() or m.user.username for m in obj.managers.select_related("user")]
+
+
+class AllotmentRowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AllotmentRow
+        fields = ["id", "section", "roll_from", "roll_to", "room", "seat", "note"]
+
+    def validate(self, data):
+        merged = {k: data.get(k, getattr(self.instance, k, "")) for k in ("section", "roll_from", "roll_to", "room", "seat", "note")}
+        merged["roll_from"], merged["roll_to"] = allotment.norm(merged["roll_from"]), allotment.norm(merged["roll_to"])
+        merged["section"] = allotment.norm(merged["section"])
+        merged["room"], merged["seat"], merged["note"] = (str(merged[k] or "").strip() for k in ("room", "seat", "note"))
+        errs = allotment.validate_row(merged)
+        if errs:
+            raise serializers.ValidationError({"detail": "; ".join(errs)})
+        return merged
+
+

@@ -1,8 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import (Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, ReminderLog, Report, SeatAllotment, Subject, SyllabusEntry, User)
+from .models import (AllotmentRow, Exam, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
+                     FormGuide, Group, Lab, Notification, Post, ReminderLog, Report, Subject, SyllabusEntry, User)
 
 
 @admin.register(User)
@@ -103,11 +103,25 @@ class SyllabusEntryAdmin(admin.ModelAdmin):
     search_fields = ("subject__name", "subject__code", "content")
 
 
-@admin.register(SeatAllotment)
-class SeatAllotmentAdmin(admin.ModelAdmin):
-    list_display = ("roll_no", "student_name", "exam_name", "exam_date", "room", "seat")
-    list_filter = ("exam_name", "exam_date")
-    search_fields = ("roll_no", "student_name")
+class ExamManagerInline(admin.TabularInline):
+    model = ExamManager
+    extra = 0
+    autocomplete_fields = ["user"]
+    verbose_name = "faculty allowed to manage this exam"
+
+
+class AllotmentRowInline(admin.TabularInline):
+    model = AllotmentRow
+    extra = 0
+
+
+@admin.register(Exam)
+class ExamAdmin(admin.ModelAdmin):
+    """Admins assign faculty here. Day-to-day editing (PDF upload, CSV import, preview, publish) is in the CAA app."""
+    list_display = ("name", "semester", "academic_year", "batch", "exam_date", "status")
+    list_filter = ("status", "academic_year")
+    search_fields = ("name", "batch")
+    inlines = [ExamManagerInline, AllotmentRowInline]
 
 
 admin.site.register([Group, Notification, ReminderLog, AssignmentProgress])
