@@ -19,6 +19,7 @@ function groupsFor(user) {
       { to: "/assignments", label: "Assignments", icon: "assignments" },
       { to: "/syllabus", label: "Syllabus", icon: "syllabus" },
       { to: "/seats", label: "Exam seats", icon: "seat" },
+      { to: "/attendance", label: "My attendance", icon: "clock" },
     ] },
     { label: "Campus", items: [
       { to: "/events", label: "Events", icon: "events" },
