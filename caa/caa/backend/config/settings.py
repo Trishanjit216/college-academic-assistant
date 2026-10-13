@@ -91,6 +91,7 @@ BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "College Academic Assistant")
 
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework_simplejwt.authentication.JWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
