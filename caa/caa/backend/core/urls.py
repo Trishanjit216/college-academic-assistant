@@ -18,6 +18,7 @@ router.register("reports", v.ReportViewSet)
 router.register("syllabus", v.SyllabusViewSet)
 router.register("exams", v.ExamStudentViewSet, basename="exam")
 router.register("manage/exams", v.ExamManageViewSet, basename="manage-exam")
+router.register("attendance", v.AttendanceViewSet, basename="attendance")
 router.register("manage/rows", v.AllotmentRowViewSet, basename="manage-row")
 
 urlpatterns = [

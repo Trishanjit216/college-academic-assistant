@@ -401,3 +401,67 @@ class ExamAllotmentTests(APITestCase):
         self.client.force_authenticate(None)
         self.assertEqual(self.client.get("/api/manage/exams/").status_code, 401)
         self.assertEqual(self.client.get("/api/exams/").status_code, 401)
+
+
+class AttendanceTests(APITestCase):
+    def setUp(self):
+        self.a = User.objects.create_user("a", password="pw-12345-x")
+        self.b = User.objects.create_user("b", password="pw-12345-x")
+        self.sub = Subject.objects.create(code="MA101", name="Maths")
+        self.today = timezone.localdate()
+
+    def add(self, user, **kw):
+        self.client.force_authenticate(user)
+        d = {"date": str(self.today), "status": "present"}; d.update(kw)
+        return self.client.post("/api/attendance/", d, format="json")
+
+    def test_create_edit_delete_and_duplicates(self):
+        r = self.add(self.a, status="absent", reason="illness", note="fever")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(self.add(self.a).status_code, 400)                                  # same date/subject/session
+        self.assertEqual(self.add(self.a, subject=self.sub.id).status_code, 201)             # different subject ok
+        self.assertEqual(self.client.patch(f"/api/attendance/{r.data['id']}/", {"status": "present"}, format="json").data["reason"], "")
+        self.assertEqual(self.client.delete(f"/api/attendance/{r.data['id']}/").status_code, 204)
+
+    def test_future_dates_and_bad_values_rejected(self):
+        self.assertEqual(self.add(self.a, date=str(self.today + timedelta(days=1))).status_code, 400)
+        self.assertEqual(self.add(self.a, status="maybe").status_code, 400)
+        self.assertEqual(self.add(self.a, status="absent", reason="nonsense").status_code, 400)
+
+    def test_students_cannot_touch_each_others_records(self):
+        mine = self.add(self.a).data["id"]
+        self.client.force_authenticate(self.b)
+        self.assertEqual(self.client.get(f"/api/attendance/{mine}/").status_code, 404)
+        self.assertEqual(self.client.patch(f"/api/attendance/{mine}/", {"status": "absent"}, format="json").status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/attendance/{mine}/").status_code, 404)
+        self.assertEqual(self.client.get("/api/attendance/").data, [])
+        self.assertEqual(self.client.get("/api/attendance/summary/").data["total"], 0)
+        self.assertNotIn("a", self.client.get("/api/attendance/export/").content.decode().lower().split("\n")[0].split(",")[:0])
+        r = self.add(self.b, user=self.a.id)                                                  # cannot assign to another user
+        self.assertEqual(AttendanceRecord.objects.get(pk=r.data["id"]).user_id, self.b.id)
+
+    def test_summary_formula(self):
+        for i, st in enumerate(["present", "present", "absent", "holiday"]):
+            self.add(self.a, date=str(self.today - timedelta(days=i + 1)), status=st, **({"reason": "family"} if st == "absent" else {}))
+        s = self.client.get("/api/attendance/summary/?target=75").data
+        self.assertEqual((s["present"], s["absent"], s["holiday"], s["percentage"]), (2, 1, 1, 66.7))
+        self.assertEqual(s["reasons"][0]["count"], 1)
+        self.assertIn("not your official", s["target"]["note"])
+        self.assertIsNone(self.client.get("/api/attendance/summary/?status=holiday").data["percentage"])
+
+    def test_csv_export_is_own_and_formula_safe(self):
+        self.add(self.a, status="absent", reason="other", note="=HYPERLINK(\"x\")")
+        self.add(self.b, status="absent", reason="other", note="b-private")
+        self.client.force_authenticate(self.a)
+        body = self.client.get("/api/attendance/export/").content.decode()
+        self.assertIn("'=HYPERLINK", body); self.assertNotIn("b-private", body)
+        self.assertEqual(self.client.get("/api/attendance/export/").status_code, 200)
+
+    def test_bad_filter_values_do_not_crash(self):
+        self.add(self.a)
+        self.assertEqual(len(self.client.get("/api/attendance/?from=abc&to=2020-99-99&month=zz&subject=x&status=nope").data), 1)
+        self.assertEqual(self.client.get("/api/attendance/summary/?target=abc").status_code, 200)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get("/api/attendance/").status_code, 401)

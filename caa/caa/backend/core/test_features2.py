@@ -1,7 +1,9 @@
 """Pure-Python tests (no Django):  cd backend && python3 -m unittest core.test_features2"""
 import unittest
 
-from . import allotment, pdf_extract
+from datetime import date
+
+from . import allotment, attendance_calc as ac, pdf_extract
 
 
 def R(**k):
@@ -96,6 +98,50 @@ class PdfExtract(unittest.TestCase):
         self.assertTrue(len(pdf_extract.suggest_rows(text)["rows"]) >= 3)
         with self.assertRaises(pdf_extract.ExtractionUnavailable):
             pdf_extract.extract_text(b"not a pdf")
+
+
+class Attendance(unittest.TestCase):
+    D = lambda self, m, d: date(2026, m, d)
+
+    def rec(self, status, m=10, d=1, subject=None, reason=""):
+        return {"date": self.D(m, d), "subject": subject, "status": status, "reason": reason}
+
+    def test_formula_excludes_holidays_and_missing(self):
+        s = ac.summarize([self.rec("present", d=1), self.rec("present", d=2), self.rec("absent", d=3, reason="illness"),
+                          self.rec("holiday", d=4), self.rec("holiday", d=5)])
+        self.assertEqual((s["present"], s["absent"], s["holiday"], s["counted"]), (2, 1, 2, 3))
+        self.assertEqual(s["percentage"], 66.7)
+
+    def test_not_enough_data(self):
+        self.assertIsNone(ac.summarize([])["percentage"])
+        self.assertIsNone(ac.summarize([self.rec("holiday")])["percentage"])
+        self.assertEqual(ac.summarize([])["insights"], ["Record a few days to see your attendance summary."])
+
+    def test_subject_wise_independent(self):
+        s = ac.summarize([self.rec("present", subject=1), self.rec("absent", d=2, subject=1), self.rec("present", d=3, subject=2),
+                          self.rec("present", d=4, subject=2)])
+        by = {x["subject"]: x["percentage"] for x in s["subjects"]}
+        self.assertEqual(by, {1: 50.0, 2: 100.0}); self.assertEqual(s["percentage"], 75.0)
+
+    def test_months_and_reasons(self):
+        s = ac.summarize([self.rec("absent", m=9, reason="illness"), self.rec("absent", m=10, d=2, reason="illness"),
+                          self.rec("absent", m=10, d=3, reason="family"), self.rec("present", m=10, d=4)])
+        self.assertEqual([m["month"] for m in s["months"]], ["2026-09", "2026-10"])
+        self.assertEqual(s["reasons"][0], {"reason": "illness", "label": "Illness", "count": 2})
+
+    def test_estimates(self):
+        self.assertEqual(ac.sessions_needed(6, 4, 75), 6)          # (6+6)/(10+6)=75%
+        self.assertEqual(ac.sessions_needed(9, 1, 75), 0)
+        self.assertIsNone(ac.sessions_needed(6, 4, 100)); self.assertEqual(ac.sessions_needed(10, 0, 100), 0)
+        self.assertIsNone(ac.sessions_needed(0, 0, 75)); self.assertIsNone(ac.sessions_needed(5, 5, 0))
+        self.assertEqual(ac.can_miss(9, 1, 75), 2)                 # 9/12 = 75%
+        self.assertEqual(ac.can_miss(5, 5, 75), 0)
+
+    def test_target_insights_labelled_as_estimates(self):
+        s = ac.summarize([self.rec("present"), self.rec("absent", d=2, reason="illness")], target=75)
+        txt = " ".join(s["insights"])
+        self.assertIn("estimate", txt); self.assertIn("recorded 1 absence", txt)
+        self.assertIn("not your official", s["target"]["note"])
 
 
 if __name__ == "__main__":

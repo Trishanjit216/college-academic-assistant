@@ -2,7 +2,7 @@ import hmac
 import math
 import os
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -27,10 +27,10 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from . import serializers as s
-from .models import (AllotmentRow, Exam, ExamDocument, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
+from .models import (AllotmentRow, AttendanceRecord, Exam, ExamDocument, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
                      FormGuide, Group, Lab, Notification, Post, Report, Subject,
                      SyllabusEntry)
-from . import allotment, otp, pdf_extract
+from . import allotment, attendance_calc, otp, pdf_extract
 from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import IsModerator, ReadAllEditorsWrite
 
@@ -663,3 +663,73 @@ class AllotmentRowViewSet(mixins.UpdateModelMixin, mixins.DestroyModelMixin, vie
         u = self.request.user
         qs = AllotmentRow.objects.all()
         return qs if _is_admin(u) else qs.filter(exam__managers__user=u)
+
+
+# =====================================================================
+#  Personal attendance tracker (private to each student)
+# =====================================================================
+class AttendanceViewSet(viewsets.ModelViewSet):
+    serializer_class = s.AttendanceSerializer
+    pagination_class = None
+
+    def _filtered(self):
+        qs = AttendanceRecord.objects.filter(user=self.request.user).select_related("subject")   # ownership is enforced here, always
+        p = self.request.query_params
+        for key, op in (("from", "date__gte"), ("to", "date__lte")):
+            try:                                          # a malformed date is ignored rather than causing a server error
+                qs = qs.filter(**{op: date.fromisoformat(p[key])}) if p.get(key) else qs
+            except ValueError:
+                pass
+        if p.get("month") and re.fullmatch(r"\d{4}-\d{2}", p["month"]):
+            y, m = p["month"].split("-")
+            qs = qs.filter(date__year=int(y), date__month=int(m))
+        if p.get("subject") == "none":
+            qs = qs.filter(subject__isnull=True)
+        elif p.get("subject", "").isdigit():
+            qs = qs.filter(subject_id=int(p["subject"]))
+        if p.get("status") in ("present", "absent", "holiday"):
+            qs = qs.filter(status=p["status"])
+        return qs
+
+    def get_queryset(self):
+        # detail routes (edit/delete) also go through the owner filter, so another student's id is simply a 404
+        return self._filtered() if self.action == "list" else AttendanceRecord.objects.filter(user=self.request.user)
+
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), "request": self.request}
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        recs = list(self._filtered().values("date", "subject", "subject__name", "status", "reason"))
+        names = {r["subject"]: r["subject__name"] for r in recs if r["subject"]}
+        try:
+            target = float(request.query_params.get("target") or 0) or None
+        except ValueError:
+            target = None
+        if target is not None and not 0 < target <= 100:
+            target = None
+        out = attendance_calc.summarize(recs, target=target)
+        for sub in out["subjects"]:
+            sub["name"] = names.get(sub["subject"], "No subject selected")
+        p = request.query_params
+        out["period"] = {"from": p.get("from") or None, "to": p.get("to") or None, "month": p.get("month") or None,
+                         "first": min((r["date"] for r in recs), default=None), "last": max((r["date"] for r in recs), default=None)}
+        return Response(out)
+
+    @action(detail=False, methods=["get"])
+    def export(self, request):
+        def safe(v):                                   # stop spreadsheet formula injection from free-text notes
+            v = "" if v is None else str(v)
+            return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["date", "subject", "period", "status", "reason", "note"])
+        for r in self._filtered().order_by("date", "id"):
+            w.writerow([r.date.isoformat(), safe(r.subject.name if r.subject else ""), r.period or "", r.status,
+                        r.get_reason_display() if r.reason else "", safe(r.note)])
+        resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+        resp["Content-Disposition"] = 'attachment; filename="my-attendance.csv"'
+        return resp

@@ -290,3 +290,22 @@ class AllotmentRow(models.Model):
         ordering = ["section", "roll_from"]
 
 
+class AttendanceRecord(models.Model):
+    """A student's PERSONAL self-tracked attendance. Private to the owner; not official college attendance."""
+    PRESENT, ABSENT, HOLIDAY = "present", "absent", "holiday"
+    STATUS = [(PRESENT, "Present"), (ABSENT, "Absent"), (HOLIDAY, "Holiday")]
+    REASONS = [("illness", "Illness"), ("personal", "Personal reason"), ("family", "Family reason"),
+               ("transport", "Transport or travel issue"), ("college", "College event or approved activity"), ("other", "Other")]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="attendance")
+    date = models.DateField()
+    subject = models.ForeignKey(Subject, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    period = models.PositiveSmallIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=8, choices=STATUS)
+    reason = models.CharField(max_length=12, choices=REASONS, blank=True)
+    note = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        indexes = [models.Index(fields=["user", "date"])]

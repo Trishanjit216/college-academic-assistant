@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import allotment, sections
-from .models import (AllotmentRow, Exam, ExamDocument, Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab, SyllabusEntry,
+from .models import (AllotmentRow, AttendanceRecord, Exam, ExamDocument, Assignment, ClassRecord, Comment, Event, Experiment, FormGuide, Group, Lab, SyllabusEntry,
                      Notification, Post, Report, Subject)
 
 User = get_user_model()
@@ -285,3 +285,33 @@ class AllotmentRowSerializer(serializers.ModelSerializer):
         return merged
 
 
+class AttendanceSerializer(serializers.ModelSerializer):
+    subject_name = serializers.CharField(source="subject.name", read_only=True, default=None)
+
+    class Meta:
+        model = AttendanceRecord
+        fields = ["id", "date", "subject", "subject_name", "period", "status", "reason", "note"]
+
+    def validate_date(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("You can't record attendance for a future date.")
+        return value
+
+    def validate_note(self, value):
+        return (value or "").strip()
+
+    def validate(self, data):
+        g = lambda k: data[k] if k in data else getattr(self.instance, k, None)
+        status, reason = g("status"), g("reason") or ""
+        if status == AttendanceRecord.ABSENT:
+            if reason and reason not in dict(AttendanceRecord.REASONS):
+                raise serializers.ValidationError({"reason": "Choose one of the listed reasons."})
+        else:
+            data["reason"] = ""                       # a reason only makes sense for an absence
+        user = self.context["request"].user
+        dup = AttendanceRecord.objects.filter(user=user, date=g("date"), subject=g("subject"), period=g("period"))
+        if self.instance:
+            dup = dup.exclude(pk=self.instance.pk)
+        if dup.exists():
+            raise serializers.ValidationError({"detail": "You already recorded this date, subject and session. Edit that entry instead."})
+        return data
