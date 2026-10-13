@@ -31,6 +31,7 @@ function groupsFor(user) {
     ] },
   ];
   const admin = [];
+  if (isStaff) admin.push({ to: "/seats/manage", label: "Manage seats", icon: "seat" });
   if (canModerate) admin.push({ to: "/moderation", label: "Moderation", icon: "shield" });
   if (isStaff) admin.push({ href: `${API}/admin/`, label: "Admin panel", icon: "external" });
   if (admin.length) groups.push({ label: "Administration", items: admin });

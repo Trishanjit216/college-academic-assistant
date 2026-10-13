@@ -9,6 +9,7 @@ import Discussion from "./pages/Discussion.jsx";
 import Moderation from "./pages/Moderation.jsx";
 import Syllabus from "./pages/Syllabus.jsx";
 import Seats from "./pages/Seats.jsx";
+import ManageExams from "./pages/ManageExams.jsx";
 import Profile from "./pages/Profile.jsx";
 
 export default function App() {
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/assignments" element={<Assignments />} />
         <Route path="/syllabus" element={<Syllabus user={user} />} />
         <Route path="/seats" element={<Seats user={user} />} />
+        <Route path="/seats/manage" element={<ManageExams user={user} />} />
         <Route path="/profile" element={<Profile user={user} onSaved={load} />} />
         <Route path="/events" element={<Events />} />
         <Route path="/forms" element={<Forms />} />

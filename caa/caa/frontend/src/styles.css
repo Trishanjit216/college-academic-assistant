@@ -358,3 +358,30 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .syl-chev { position: absolute; right: var(--s4); top: 20px; }
 .banner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s3) var(--s4); margin-bottom: var(--s4); border-radius: var(--r-md); background: var(--warning-soft, #fef3c7); color: var(--warning); font-size: .9rem; }
 .banner .link-btn { color: inherit; font-weight: 600; text-decoration: underline; padding: 0; margin-left: auto; }
+
+/* ---- exam seat allotment management ---- */
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
+.manage-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: var(--s4); align-items: start; }
+.exam-list { list-style: none; display: grid; gap: var(--s2); }
+.exam-item { width: 100%; text-align: left; display: grid; gap: 2px; justify-items: start; padding: var(--s3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.exam-item:hover { background: var(--surface-2); }
+.exam-item.is-active { border-color: var(--primary); background: var(--primary-soft); }
+.table-wrap { overflow-x: auto; margin-top: var(--s3); }
+.data-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.data-table th, .data-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.data-table th { font-size: .78rem; color: var(--muted); font-weight: 600; }
+.row-actions { white-space: nowrap; text-align: right; }
+.row-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--s2); margin: var(--s2) 0; }
+.row-add { margin-top: var(--s4); display: grid; gap: var(--s2); }
+.check { display: flex; align-items: center; gap: var(--s2); font-size: .9rem; }
+.check input { width: auto; min-height: 0; }
+.sugg { border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s3); margin-bottom: var(--s2); background: var(--surface-2); }
+@media (max-width: 800px) {
+  .manage-grid { grid-template-columns: minmax(0, 1fr); }
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .data-table thead { display: none; }
+  .data-table tr { display: block; border-bottom: 2px solid var(--border); padding: 6px 0; }
+  .data-table td { display: flex; justify-content: space-between; gap: var(--s3); border: 0; padding: 4px 6px; }
+  .data-table td[data-label]::before { content: attr(data-label); color: var(--muted); font-weight: 600; }
+  .row-actions { justify-content: flex-end; }
+}
