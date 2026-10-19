@@ -159,7 +159,7 @@ export function useList(path, search) {
 }
 
 /** Standard list page: header, search, optional filter tabs, loading / empty / error states. */
-export function ListPage({ title, description, path, searchable = true, filters, empty, actions, render }) {
+export function ListPage({ title, description, path, searchable = true, filters, empty, actions, render, notice }) {
   const [q, setQ] = useState("");
   const [f, setF] = useState(filters ? filters[0].key : null);
   const { items, err, reload } = useList(path, q);
@@ -186,6 +186,7 @@ export function ListPage({ title, description, path, searchable = true, filters,
           </div>
         )}
       </div>
+      {notice && items ? notice(items) : null}
       {err && !items ? <ErrorState message={err} onRetry={reload} /> :
         !shown ? <SkeletonList /> :
         shown.length === 0 ? (

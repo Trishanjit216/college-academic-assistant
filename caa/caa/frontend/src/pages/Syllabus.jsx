@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "../api.js";
 import Icon from "../icons.jsx";
 import { EXAMS, parseSyllabus } from "../syllabusFormat.js";
@@ -28,14 +29,16 @@ function Content({ text }) {
   );
 }
 
-function SubjectCard({ subject, entries, open, onToggle, isStaff }) {
+function SubjectCard({ subject, entries, open, onToggle, isStaff, focusExam, focused }) {
   const [exam, setExam] = useState("mid1");
+  const cardRef = useRef(null);
+  useEffect(() => { if (focused) { if (focusExam) setExam(focusExam); cardRef.current?.scrollIntoView({ block: "start" }); } }, [focused, focusExam]);
   const e = entries[exam];
   const has = (k) => !!(entries[k] && (entries[k].content?.trim() || safeUrl(entries[k].pdf_url)));
   const pdf = e ? safeUrl(e.pdf_url) : "";
   const panelId = `syl-${subject.id}`;
   return (
-    <article className="card syl-card">
+    <article ref={cardRef} className={`card syl-card ${focused ? "is-target" : ""}`}>
       <button className="syl-head" aria-expanded={open} aria-controls={panelId} onClick={onToggle}>
         <span className="syl-title">
           <span className="syl-code">{subject.code}</span>
@@ -87,6 +90,11 @@ export default function Syllabus({ user }) {
   const [openId, setOpenId] = useState(null);
   const [tick, setTick] = useState(0);
   const isStaff = ["admin", "faculty"].includes(user.role);
+  // deep link from a notification: /syllabus?subject=<id>&exam=mid1
+  const qs = new URLSearchParams(useLocation().search);
+  const focusId = Number(qs.get("subject")) || null;
+  const focusExam = EXAMS.some((x) => x.key === qs.get("exam")) ? qs.get("exam") : "";
+  useEffect(() => { if (focusId && data?.subjects.some((s) => s.id === focusId)) { setOpenId(focusId); setSem("all"); setQ(""); } }, [data, focusId, focusExam]);
 
   useEffect(() => { document.title = "Academic syllabus · College Academic Assistant"; }, []);
   useEffect(() => {
@@ -137,6 +145,9 @@ export default function Syllabus({ user }) {
           <input type="search" aria-label="Search subjects" placeholder="Search by subject or code" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </div>
+      {focusId && data && !data.subjects.some((s) => s.id === focusId) && (
+        <div className="form-info" role="status">That syllabus is no longer available.</div>
+      )}
       {!shown ? <SkeletonList /> :
         rows.length === 0 ? (
           <EmptyState icon="syllabus" title="No subjects yet">Subjects and their syllabus will appear here once the college adds them.</EmptyState>
@@ -148,6 +159,7 @@ export default function Syllabus({ user }) {
             <div className="stack">
               {groups[k].map((r) => (
                 <SubjectCard key={r.subject.id} subject={r.subject} entries={r.entries} isStaff={isStaff}
+                  focused={focusId === r.subject.id} focusExam={focusExam}
                   open={openId === r.subject.id} onToggle={() => setOpenId(openId === r.subject.id ? null : r.subject.id)} />
               ))}
             </div>

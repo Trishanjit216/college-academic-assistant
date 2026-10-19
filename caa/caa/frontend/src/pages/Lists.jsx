@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { api } from "../api.js";
 import Icon from "../icons.jsx";
 import { useToast } from "../toast.jsx";
+import { CHANGED } from "../notifications.jsx";
 import { Badge, Button, Linkify, ListPage, dueInfo, fmtD, fmtDT } from "./ui.jsx";
 
 const STATUS_TONE = { completed: "success", ongoing: "primary", planned: "neutral" };
@@ -127,40 +129,50 @@ export const Assignments = () => (
   />
 );
 
-export const Events = () => (
-  <ListPage
-    title="Events calendar"
-    description="Upcoming and past college events."
-    path="/events/"
-    empty={{ title: "No events yet", text: "Events will appear here when the college adds them." }}
-    render={(e) => {
-      const d = new Date(e.start);
-      return (
-        <article className="card event" key={e.id}>
-          <div className="date-tile" aria-hidden="true">
-            <strong>{d.getDate()}</strong>
-            <span>{d.toLocaleDateString("en-IN", { month: "short" })}</span>
-          </div>
-          <div className="event-body">
-            <h2 className="card-title">{e.name}</h2>
-            <div className="card-meta">
-              <span><Icon name="clock" size={16} />{fmtDT(e.start)}</span>
-              {e.venue && <span><Icon name="pin" size={16} />{e.venue}</span>}
-              {e.organizer && <span><Icon name="user" size={16} />{e.organizer}</span>}
-            </div>
-            {e.description && <p className="card-body"><Linkify text={e.description} /></p>}
-            {(e.registration_info || e.eligibility) && (
-              <dl className="facts">
-                {e.registration_info && <div><dt>Registration</dt><dd><Linkify text={e.registration_info} /></dd></div>}
-                {e.eligibility && <div><dt>Eligibility</dt><dd><Linkify text={e.eligibility} /></dd></div>}
-              </dl>
-            )}
-          </div>
-        </article>
-      );
-    }}
-  />
-);
+function EventCard({ e, target }) {
+  const d = new Date(e.start);
+  const me = String(e.id) === target;
+  const ref = useRef(null);
+  useEffect(() => { if (me) ref.current?.scrollIntoView({ block: "center" }); }, [me]);
+  return (
+    <article ref={ref} id={`event-${e.id}`} className={`card event ${me ? "is-target" : ""}`} aria-current={me ? "true" : undefined}>
+      <div className="date-tile" aria-hidden="true">
+        <strong>{d.getDate()}</strong>
+        <span>{d.toLocaleDateString("en-IN", { month: "short" })}</span>
+      </div>
+      <div className="event-body">
+        <h2 className="card-title">{e.name}</h2>
+        <div className="card-meta">
+          <span><Icon name="clock" size={16} />{fmtDT(e.start)}</span>
+          {e.venue && <span><Icon name="pin" size={16} />{e.venue}</span>}
+          {e.organizer && <span><Icon name="user" size={16} />{e.organizer}</span>}
+        </div>
+        {e.description && <p className="card-body"><Linkify text={e.description} /></p>}
+        {(e.registration_info || e.eligibility) && (
+          <dl className="facts">
+            {e.registration_info && <div><dt>Registration</dt><dd><Linkify text={e.registration_info} /></dd></div>}
+            {e.eligibility && <div><dt>Eligibility</dt><dd><Linkify text={e.eligibility} /></dd></div>}
+          </dl>
+        )}
+      </div>
+    </article>
+  );
+}
+
+export function Events() {
+  const target = new URLSearchParams(useLocation().search).get("event") || "";
+  return (
+    <ListPage
+      title="Events calendar"
+      description="Upcoming and past college events."
+      path="/events/"
+      empty={{ title: "No events yet", text: "Events will appear here when the college adds them." }}
+      notice={(items) => target && !items.some((x) => String(x.id) === target)
+        ? <div className="form-info" role="status">That event is no longer available. It may have been removed or moved back to draft.</div> : null}
+      render={(e) => <EventCard key={e.id} e={e} target={target} />}
+    />
+  );
+}
 
 export const Forms = () => (
   <ListPage
@@ -200,18 +212,21 @@ export const Forms = () => (
 function NotificationCard({ n, reload }) {
   const toast = useToast();
   async function markRead() {
-    try { await api(`/notifications/${n.id}/read/`, { method: "POST" }); reload(); }
+    try { await api(`/notifications/${n.id}/read/`, { method: "POST" }); reload(); window.dispatchEvent(new Event(CHANGED)); }
     catch (e) { toast(e.message, "danger"); }
   }
   return (
-    <article className={`card ${n.read ? "is-done" : ""}`}>
+    <article className={`card notif-card ${n.read ? "is-done" : "is-unread"}`}>
       <div className="card-head">
         <h2 className="card-title">{!n.read && <span className="unread-dot" aria-hidden="true" />}{n.title}</h2>
         {!n.read && <Badge tone="primary">New</Badge>}
       </div>
       <div className="card-meta"><span><Icon name="clock" size={16} />{fmtDT(n.created_at)}</span></div>
-      {n.message && <p className="card-body">{n.message}</p>}
-      {!n.read && <div className="card-actions"><button className="link-btn" onClick={markRead}>Mark as read</button></div>}
+      {n.message && <p className="card-body notif-pre">{n.message}</p>}
+      <div className="card-actions">
+        {n.link && n.link.startsWith("/") && <Link className="link-btn" to={n.link} onClick={() => { if (!n.read) markRead(); }}>Open</Link>}
+        {!n.read && <button className="link-btn" onClick={markRead}>Mark as read</button>}
+      </div>
     </article>
   );
 }
@@ -222,7 +237,7 @@ function MarkAllRead({ reload, items }) {
   if (!items || !items.some((n) => !n.read)) return null;
   async function run() {
     setBusy(true);
-    try { await api("/notifications/read_all/", { method: "POST" }); toast("All notifications marked as read"); reload(); }
+    try { await api("/notifications/read_all/", { method: "POST" }); toast("All notifications marked as read"); reload(); window.dispatchEvent(new Event(CHANGED)); }
     catch (e) { toast(e.message, "danger"); } finally { setBusy(false); }
   }
   return <Button variant="secondary" size="sm" loading={busy} onClick={run}>Mark all as read</Button>;
@@ -231,11 +246,11 @@ function MarkAllRead({ reload, items }) {
 export const Notifications = () => (
   <ListPage
     title="Notifications"
-    description="Reminders for assignments that are due soon."
+    description="New events, syllabus updates and assignment reminders."
     path="/notifications/"
     searchable={false}
     actions={(reload, items) => <MarkAllRead reload={reload} items={items} />}
-    empty={{ title: "You're all caught up", text: "Deadline reminders will show up here." }}
+    empty={{ title: "You're all caught up", text: "New events, syllabus updates and deadline reminders will show up here." }}
     render={(n, reload) => <NotificationCard key={n.id} n={n} reload={reload} />}
   />
 );
