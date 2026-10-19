@@ -141,9 +141,15 @@ class Notification(models.Model):
     message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     read = models.BooleanField(default=False)
+    kind = models.CharField(max_length=12, blank=True, default="")                 # "event", "syllabus", "assignment" ...
+    link = models.CharField(max_length=200, blank=True, default="")                # in-app path, e.g. /events?event=3
+    ref = models.CharField(max_length=60, blank=True, default="", db_index=True)  # what it is about, e.g. "event:3"
+    dedupe_key = models.CharField(max_length=80, blank=True, default="")         # one notification per (user, key)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ["-created_at", "-id"]
+        constraints = [models.UniqueConstraint(fields=["user", "dedupe_key"], condition=~models.Q(dedupe_key=""),
+                                               name="core_notif_user_dedupe_uniq")]
 
 
 class Event(models.Model):
@@ -154,9 +160,25 @@ class Event(models.Model):
     description = models.TextField(blank=True)
     registration_info = models.TextField(blank=True)
     eligibility = models.CharField(max_length=200, blank=True)
+    is_published = models.BooleanField(default=True, help_text="Untick to keep this event as a draft: hidden from students, and nobody is notified. "
+                                                                 "Students are notified when it is published.")
+    target_group = models.ForeignKey(Group, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+                                     help_text="Leave empty to notify everyone. Or choose a group.")
+    target_sections = models.CharField(max_length=120, blank=True, default="",
+                                       help_text="Optional. Notify only these sections, e.g. A1, A2, B3 (overrides the group).")
 
     class Meta:
         ordering = ["start"]
+
+    def clean(self):
+        super().clean()
+        from django.core.exceptions import ValidationError
+        from . import notify
+        try:
+            secs = notify.parse_sections(self.target_sections)
+        except ValueError as e:
+            raise ValidationError({"target_sections": str(e)})
+        self.target_sections = ", ".join(secs)
 
 
 class FormGuide(models.Model):
@@ -220,8 +242,9 @@ class SyllabusEntry(models.Model):
     exam = models.CharField(max_length=5, choices=EXAMS)
     content = models.TextField(blank=True)
     pdf_url = models.URLField(blank=True, max_length=500, help_text="Link to the official syllabus PDF, if any")
-    verified = models.BooleanField(default=False, help_text="Tick once checked against the official document")
+    verified = models.BooleanField(default=False, help_text="Tick once checked against the official document. Students are notified when a verified syllabus is published or changed.")
     updated_at = models.DateTimeField(auto_now=True)
+    revision = models.PositiveIntegerField(default=0, editable=False)   # bumped each time students are notified
 
     class Meta:
         unique_together = [("subject", "exam")]

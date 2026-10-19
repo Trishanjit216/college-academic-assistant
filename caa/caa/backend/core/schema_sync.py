@@ -6,19 +6,34 @@ database treats the regenerated 0001 as applied, so models/columns added later w
 nothing on a database that is already up to date (including a fresh one built by `migrate`)."""
 from django.db import connection
 
-from .models import AllotmentRow, AttendanceRecord, Exam, ExamDocument, ExamManager, SyllabusEntry, User
+from .models import AllotmentRow, AttendanceRecord, Event, Exam, ExamDocument, ExamManager, Notification, SyllabusEntry, User
 
 NEW_MODELS = (SyllabusEntry, Exam, ExamDocument, ExamManager, AllotmentRow, AttendanceRecord)   # order matters (FKs)
+
+
+# columns added to tables that already exist on a deployed database
+NEW_COLUMNS = (
+    (Notification, "kind"), (Notification, "link"), (Notification, "ref"), (Notification, "dedupe_key"),
+    (Event, "is_published"), (Event, "target_group"), (Event, "target_sections"),
+    (SyllabusEntry, "revision"),
+)
+
+
+def _columns(cur, model):
+    return {c.name for c in connection.introspection.get_table_description(cur, model._meta.db_table)}
 
 
 def ensure_schema():
     done = []
     with connection.cursor() as cur:
         tables = set(connection.introspection.table_names(cur))
-        cols = {c.name for c in connection.introspection.get_table_description(cur, User._meta.db_table)}
-    missing = [m for m in NEW_MODELS if m._meta.db_table not in tables]
-    need_section = "section" not in cols
-    if not missing and not need_section:
+        missing = [m for m in NEW_MODELS if m._meta.db_table not in tables]
+        cols = {m: _columns(cur, m) for m in {User, Notification, Event, SyllabusEntry} if m._meta.db_table in tables}
+        add = [(m, f) for m, f in NEW_COLUMNS if m in cols and m._meta.get_field(f).column not in cols[m]]
+        need_section = "section" not in cols.get(User, {"section"})
+        constraint = next(c for c in Notification._meta.constraints if c.name == "core_notif_user_dedupe_uniq")
+        need_constraint = Notification in cols and constraint.name not in connection.introspection.get_constraints(cur, Notification._meta.db_table)
+    if not (missing or need_section or add or need_constraint):
         return done                      # already up to date: don't even open a schema editor
     with connection.schema_editor() as editor:
         for model in missing:
@@ -27,6 +42,12 @@ def ensure_schema():
         if need_section:
             editor.add_field(User, User._meta.get_field("section"))
             done.append("user.section")
+        for m, f in add:
+            editor.add_field(m, m._meta.get_field(f))
+            done.append(f"{m._meta.db_table}.{f}")
+        if need_constraint:
+            editor.add_constraint(Notification, constraint)
+            done.append("notification unique constraint")
     return done
 
 

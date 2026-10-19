@@ -161,6 +161,13 @@ class EventSerializer(serializers.ModelSerializer):
         model = Event
         fields = "__all__"
 
+    def validate_target_sections(self, value):
+        from . import notify
+        try:
+            return ", ".join(notify.parse_sections(value))
+        except ValueError as e:
+            raise serializers.ValidationError(str(e))
+
 
 class FormGuideSerializer(serializers.ModelSerializer):
     documents_list = serializers.SerializerMethodField()
@@ -176,7 +183,7 @@ class FormGuideSerializer(serializers.ModelSerializer):
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
-        fields = ["id", "title", "message", "created_at", "read"]
+        fields = ["id", "title", "message", "created_at", "read", "kind", "link"]
 
 
 class CommentSerializer(serializers.ModelSerializer):

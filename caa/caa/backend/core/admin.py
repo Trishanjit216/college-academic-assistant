@@ -57,8 +57,14 @@ class AssignmentAdmin(admin.ModelAdmin):
 
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ("name", "start", "venue", "organizer")
+    list_display = ("name", "start", "venue", "organizer", "is_published", "target_group", "target_sections")
+    list_filter = ("is_published", "target_group")
     search_fields = ("name", "venue")
+    fieldsets = (
+        (None, {"fields": ("name", "start", "venue", "organizer", "description", "registration_info", "eligibility")}),
+        ("Publishing and notifications", {"fields": ("is_published", "target_group", "target_sections"),
+                                          "description": "Students get a notification when an event is published. Drafts (unticked) notify nobody."}),
+    )
 
 
 @admin.register(FormGuide)

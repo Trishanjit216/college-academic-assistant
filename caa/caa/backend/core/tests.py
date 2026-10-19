@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .management.commands.send_reminders import send_due_reminders
-from .models import AllotmentRow, Assignment, AttendanceRecord, Exam, ExamManager, Group, Notification, Post, Subject, SyllabusEntry, User
+from .models import AllotmentRow, Assignment, AttendanceRecord, Event, Exam, ExamManager, Group, Notification, Post, Subject, SyllabusEntry, User
 
 
 class AuthAndPermissionTests(APITestCase):
@@ -465,3 +465,230 @@ class AttendanceTests(APITestCase):
     def test_requires_login(self):
         self.client.force_authenticate(None)
         self.assertEqual(self.client.get("/api/attendance/").status_code, 401)
+
+
+@override_settings(CACHES=LOCMEM, AI_API_KEY="SECRET", AI_MODEL="m", AI_PROVIDER="gemini", AI_DAILY_LIMIT_PER_USER=2)
+class AIAssistantTests(APITestCase):
+    def setUp(self):
+        caches["otp"].clear()
+        self.u = User.objects.create_user("u", password="pw-12345-x", first_name="Asha", roll_no="21CS001")
+        self.client.force_authenticate(self.u)
+        self.calls = []
+        def fake(cfg, system, msgs):
+            self.calls.append((cfg, system, msgs)); return "Answer"
+        p = mock.patch("core.views.ai_provider.chat", side_effect=fake); p.start(); self.addCleanup(p.stop)
+
+    def chat(self, text="What is a pointer?"):
+        return self.client.post("/api/ai/chat/", {"messages": [{"role": "user", "content": text}]}, format="json")
+
+    def test_reply_and_no_private_data_or_key_sent_back(self):
+        r = self.chat()
+        self.assertEqual((r.status_code, r.data["reply"]), (200, "Answer"))
+        self.assertNotIn("SECRET", str(r.data))
+        cfg, system, msgs = self.calls[0]
+        blob = system + str(msgs)
+        for private in ("Asha", "21CS001", "pw-12345-x", "u@"):
+            self.assertNotIn(private, blob)
+
+    def test_followup_history_is_passed(self):
+        r = self.client.post("/api/ai/chat/", {"messages": [{"role": "user", "content": "Explain arrays"}, {"role": "assistant", "content": "ok"},
+                                                            {"role": "user", "content": "and pointers?"}]}, format="json")
+        self.assertEqual(len(self.calls[0][2]), 3)
+
+    def test_verified_syllabus_is_retrieved_unverified_is_not(self):
+        sub = Subject.objects.create(code="CS101", name="Programming in C")
+        SyllabusEntry.objects.create(subject=sub, exam="mid1", content="Unit 1: pointers and arrays", verified=True)
+        SyllabusEntry.objects.create(subject=sub, exam="mid2", content="Unit 9: secretdraft pointers", verified=False)
+        self.chat("what pointers are in the C syllabus")
+        self.assertIn("Unit 1: pointers", self.calls[0][1]); self.assertNotIn("secretdraft", self.calls[0][1])
+
+    def test_limits_validation_and_status(self):
+        self.assertEqual(self.chat().status_code, 200); self.assertEqual(self.chat().status_code, 200)
+        r = self.chat(); self.assertEqual((r.status_code, r.data["code"]), (429, "daily_limit"))
+        self.assertEqual(self.client.post("/api/ai/chat/", {"messages": []}, format="json").status_code, 400)
+        self.assertEqual(self.client.post("/api/ai/chat/", {"messages": [{"role": "user", "content": "x" * 3000}]}, format="json").status_code, 400)
+        st = self.client.get("/api/ai/status/").data
+        self.assertTrue(st["enabled"]); self.assertNotIn("SECRET", str(st))
+
+    def test_provider_failure_is_friendly_and_does_not_use_allowance(self):
+        from .ai_provider import AIError
+        with mock.patch("core.views.ai_provider.chat", side_effect=AIError("quota", "Quota used up", 429)):
+            r = self.chat(); self.assertEqual((r.status_code, r.data["code"]), (429, "quota"))
+        self.assertEqual(self.chat().status_code, 200); self.assertEqual(self.chat().status_code, 200)
+
+    @override_settings(AI_API_KEY="")
+    def test_off_until_configured_and_login_required(self):
+        self.assertEqual(self.chat().status_code, 503)
+        self.assertFalse(self.client.get("/api/ai/status/").data["enabled"])
+        self.client.force_authenticate(None)
+        self.assertEqual(self.chat().status_code, 401)
+
+
+class NotificationTests(APITestCase):
+    """Event / syllabus notifications. (Written for Django's test runner; run with: python manage.py test core)"""
+
+    def setUp(self):
+        self.ga, self.gb = Group.objects.create(name="Group A"), Group.objects.create(name="Group B")
+        mk = lambda name, **kw: User.objects.create_user(name, password="pw-12345-x", **kw)
+        self.s1 = mk("s1", group=self.ga, section="A1", roll_no="1")
+        self.s2 = mk("s2", group=self.ga, section="A2", roll_no="2")
+        self.s3 = mk("s3", group=self.gb, section="B1", roll_no="3")
+        self.fac = mk("fac", role="faculty")
+        self.adm = mk("adm", role="admin")
+        self.sub = Subject.objects.create(code="MA101", name="Maths")
+        self.when = timezone.now() + timedelta(days=3)
+
+    def count(self, user, **kw):
+        return Notification.objects.filter(user=user, **kw).count()
+
+    # ---- events ----
+    def test_published_event_notifies_students_only_with_details(self):
+        e = Event.objects.create(name="Hackathon", start=self.when, venue="Hall A", description="Build things")
+        for u in (self.s1, self.s2, self.s3):
+            n = Notification.objects.get(user=u)
+            self.assertEqual((n.kind, n.link, n.read), ("event", f"/events?event={e.pk}", False))
+            self.assertIn("Hackathon", n.title); self.assertIn("Build things", n.message)
+            self.assertIn("Event date:", n.message); self.assertIn("Published on", n.message)
+        self.assertEqual(Notification.objects.filter(user__in=[self.fac, self.adm]).count(), 0)
+
+    def test_draft_notifies_nobody_until_published_and_never_twice(self):
+        e = Event.objects.create(name="Draft", start=self.when, is_published=False)
+        self.assertEqual(Notification.objects.count(), 0)
+        e.description = "edited while draft"; e.save()
+        self.assertEqual(Notification.objects.count(), 0)
+        e.is_published = True; e.save()
+        self.assertEqual(Notification.objects.count(), 3)
+        e.save(); e.refresh_from_db(); e.save()                       # repeated saves / double click
+        self.assertEqual(Notification.objects.count(), 3)
+        e.description = "internal note changed"; e.save()              # unrelated edit
+        self.assertEqual(Notification.objects.count(), 3)
+
+    def test_group_and_section_targeting(self):
+        Event.objects.create(name="Group A only", start=self.when, target_group=self.ga)
+        self.assertEqual((self.count(self.s1), self.count(self.s2), self.count(self.s3)), (1, 1, 0))
+        Event.objects.create(name="Sections", start=self.when, target_sections="A1, B1")
+        self.assertEqual((self.count(self.s1), self.count(self.s2), self.count(self.s3)), (2, 1, 1))
+        Event.objects.create(name="Section beats group", start=self.when, target_group=self.gb, target_sections="A2")
+        self.assertEqual((self.count(self.s1), self.count(self.s2), self.count(self.s3)), (2, 2, 1))
+
+    def test_unpublish_and_delete_remove_notifications(self):
+        e = Event.objects.create(name="Gone", start=self.when)
+        self.assertEqual(Notification.objects.count(), 3)
+        e.is_published = False; e.save()
+        self.assertEqual(Notification.objects.count(), 0)
+        e.is_published = True; e.save()
+        self.assertEqual(Notification.objects.count(), 3)
+        e.delete()
+        self.assertEqual(Notification.objects.count(), 0)
+
+    def test_drafts_hidden_from_students_in_api_and_dashboard(self):
+        Event.objects.create(name="Public", start=self.when)
+        Event.objects.create(name="Secret draft", start=self.when, is_published=False)
+        self.client.force_authenticate(self.s1)
+        names = [x["name"] for x in self.client.get("/api/events/").data["results"]]
+        self.assertEqual(names, ["Public"])
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(len(self.client.get("/api/events/").data["results"]), 2)
+
+    def test_api_rejects_invalid_sections_and_students_cannot_create(self):
+        self.client.force_authenticate(self.fac)
+        body = {"name": "E", "start": self.when.isoformat(), "target_sections": "Z9"}
+        self.assertEqual(self.client.post("/api/events/", body, format="json").status_code, 400)
+        body["target_sections"] = "a2"
+        r = self.client.post("/api/events/", body, format="json")
+        self.assertEqual((r.status_code, r.data["target_sections"]), (201, "A2"))
+        self.assertEqual((self.count(self.s2), self.count(self.s1)), (1, 0))
+        self.client.force_authenticate(self.s1)
+        self.assertEqual(self.client.post("/api/events/", body, format="json").status_code, 403)
+
+    # ---- syllabus ----
+    def post_syllabus(self, user=None, **kw):
+        self.client.force_authenticate(user or self.fac)
+        body = {"subject": self.sub.id, "exam": "mid1", "semester": 1, "content": "Unit 1\n- Limits", "verified": True}
+        body.update(kw)
+        return self.client.post("/api/syllabus/", body, format="json")
+
+    def test_new_verified_syllabus_notifies_with_subject_exam_and_link(self):
+        r = self.post_syllabus()
+        self.assertEqual(r.status_code, 201)
+        n = Notification.objects.get(user=self.s1)
+        self.assertEqual(n.kind, "syllabus"); self.assertIn("published", n.title.lower())
+        self.assertIn("Maths", n.title); self.assertIn("Mid-Term 1", n.title)
+        self.assertEqual(n.link, f"/syllabus?subject={self.sub.id}&exam=mid1")
+        self.assertEqual(self.count(self.s3), 1)
+        self.assertEqual(Notification.objects.filter(user=self.fac).count(), 0)
+
+    def test_unverified_draft_notifies_nobody_until_verified(self):
+        r = self.post_syllabus(verified=False)
+        self.assertEqual(Notification.objects.count(), 0)
+        self.client.patch(f"/api/syllabus/{r.data['id']}/", {"content": "Unit 1\n- Limits\n- Continuity"}, format="json")
+        self.assertEqual(Notification.objects.count(), 0)
+        self.client.patch(f"/api/syllabus/{r.data['id']}/", {"verified": True}, format="json")
+        self.assertEqual(self.count(self.s1), 1)
+        self.assertIn("published", Notification.objects.get(user=self.s1).title.lower())
+
+    def test_update_notifies_once_and_unchanged_save_does_not(self):
+        sid = self.post_syllabus().data["id"]
+        patch = lambda **kw: self.client.patch(f"/api/syllabus/{sid}/", kw, format="json")
+        patch(content="Unit 1\n- Limits")                                  # identical
+        patch(content="Unit 1  \r\n- Limits\n")                           # whitespace only
+        patch(semester=2)                                                  # unrelated field
+        self.assertEqual(self.count(self.s1), 1)
+        patch(content="Unit 1\n- Limits\n- Continuity")
+        self.assertEqual(self.count(self.s1), 2)
+        newest = Notification.objects.filter(user=self.s1).first()
+        self.assertIn("updated", newest.title.lower()); self.assertIn("1 line added", newest.message)
+        patch(content="Unit 1\n- Limits\n- Continuity")                   # repeated request / double click
+        self.assertEqual(self.count(self.s1), 2)
+        patch(pdf_url="https://college.example.org/ma101.pdf")
+        self.assertEqual(self.count(self.s1), 3)
+        self.assertIn("PDF", Notification.objects.filter(user=self.s1).first().message)
+
+    def test_deleting_syllabus_removes_its_notifications(self):
+        sid = self.post_syllabus().data["id"]
+        self.assertEqual(self.count(self.s1), 1)
+        self.client.delete(f"/api/syllabus/{sid}/")
+        self.assertEqual(Notification.objects.count(), 0)
+
+    def test_students_cannot_publish_syllabus(self):
+        self.assertEqual(self.post_syllabus(user=self.s1).status_code, 403)
+        self.assertEqual(Notification.objects.count(), 0)
+
+    # ---- notification API: privacy + read state ----
+    def test_students_see_only_their_own_notifications(self):
+        Event.objects.create(name="E1", start=self.when, target_sections="A1")
+        Event.objects.create(name="E2", start=self.when, target_sections="B1")
+        self.client.force_authenticate(self.s1)
+        r = self.client.get("/api/notifications/latest/")
+        self.assertEqual((r.data["unread"], [i["title"] for i in r.data["items"]]), (1, ["New event: E1"]))
+        other = Notification.objects.get(user=self.s3)
+        self.assertEqual(self.client.post(f"/api/notifications/{other.id}/read/").status_code, 404)
+        other.refresh_from_db(); self.assertFalse(other.read)
+        self.assertEqual(self.client.get(f"/api/notifications/{other.id}/").status_code, 404)
+        self.assertEqual(self.client.post("/api/notifications/", {"title": "x", "user": self.s3.id}, format="json").status_code, 405)
+        self.assertEqual(self.client.delete(f"/api/notifications/{other.id}/").status_code, 405)
+        self.assertEqual(self.client.patch(f"/api/notifications/{other.id}/", {"read": True}, format="json").status_code, 405)
+
+    def test_read_state_persists_and_read_all_only_touches_own(self):
+        Event.objects.create(name="E1", start=self.when)
+        Event.objects.create(name="E2", start=self.when)
+        self.client.force_authenticate(self.s1)
+        first = self.client.get("/api/notifications/latest/").data["items"][0]["id"]
+        self.assertEqual(self.client.post(f"/api/notifications/{first}/read/").status_code, 204)
+        self.client.force_authenticate(None); self.client.force_authenticate(self.s1)          # "log in again"
+        self.assertEqual(self.client.get("/api/notifications/latest/").data["unread"], 1)
+        self.client.post("/api/notifications/read_all/")
+        self.assertEqual(self.client.get("/api/notifications/latest/").data["unread"], 0)
+        self.assertEqual(self.count(self.s2, read=False), 2)
+
+    def test_notifications_require_login(self):
+        self.assertEqual(self.client.get("/api/notifications/latest/").status_code, 401)
+
+    def test_db_enforces_one_notification_per_publication(self):
+        from django.db import IntegrityError, transaction
+        Notification.objects.create(user=self.s1, title="a", dedupe_key="k1")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Notification.objects.create(user=self.s1, title="b", dedupe_key="k1")
+        Notification.objects.create(user=self.s1, title="c", dedupe_key="")           # blank keys are unlimited
+        Notification.objects.create(user=self.s1, title="d", dedupe_key="")
+

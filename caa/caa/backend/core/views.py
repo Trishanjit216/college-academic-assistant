@@ -30,7 +30,7 @@ from . import serializers as s
 from .models import (AllotmentRow, AttendanceRecord, Exam, ExamDocument, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
                      FormGuide, Group, Lab, Notification, Post, Report, Subject,
                      SyllabusEntry)
-from . import allotment, attendance_calc, otp, pdf_extract
+from . import ai_context, ai_provider, allotment, attendance_calc, otp, pdf_extract
 from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import IsModerator, ReadAllEditorsWrite
 
@@ -285,6 +285,10 @@ class EventViewSet(BaseViewSet):
     serializer_class = s.EventSerializer
     search_fields = ["name", "description", "venue", "organizer"]
 
+    def get_queryset(self):
+        qs = Event.objects.all()
+        return qs if self.request.user.is_editor else qs.filter(is_published=True)   # drafts are for editors only
+
 
 class FormGuideViewSet(BaseViewSet):
     queryset = FormGuide.objects.all()
@@ -309,6 +313,12 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def read_all(self, request):
         self.get_queryset().update(read=True)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["get"])
+    def latest(self, request):
+        """Everything the bell needs in one call: the unread count and the newest notifications (own only)."""
+        qs = self.get_queryset()
+        return Response({"unread": qs.filter(read=False).count(), "items": s.NotificationSerializer(qs[:20], many=True).data})
 
 
 class PostViewSet(viewsets.ModelViewSet):
@@ -403,7 +413,7 @@ class DashboardView(APIView):
             "upcoming_assignments": s.AssignmentSerializer(
                 assignments, many=True, context={**ctx, "done_ids": done_ids}).data,
             "upcoming_events": s.EventSerializer(
-                Event.objects.filter(start__gte=now)[:5], many=True, context=ctx).data,
+                Event.objects.filter(is_published=True, start__gte=now)[:5], many=True, context=ctx).data,
             "unread_notifications": Notification.objects.filter(user=u, read=False).count(),
         })
 
@@ -733,3 +743,70 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
         resp["Content-Disposition"] = 'attachment; filename="my-attendance.csv"'
         return resp
+
+
+# =====================================================================
+#  CAA AI assistant (server-side only; the key never reaches the browser)
+# =====================================================================
+def _ai_cfg():
+    return {"provider": settings.AI_PROVIDER, "api_key": settings.AI_API_KEY, "model": settings.AI_MODEL,
+            "base_url": settings.AI_BASE_URL, "max_tokens": settings.AI_MAX_OUTPUT_TOKENS, "timeout": settings.AI_TIMEOUT}
+
+
+def _ai_enabled():
+    c = _ai_cfg()
+    return bool(c["api_key"] and c["model"] and (c["provider"] == "gemini" or (c["provider"] == "openai" and c["base_url"])))
+
+
+def _ai_docs():
+    """Published CAA information the assistant may quote: verified syllabus entries, upcoming events, app help."""
+    docs = list(ai_context.APP_HELP)
+    for e in SyllabusEntry.objects.filter(verified=True).exclude(content="").select_related("subject")[:300]:
+        docs.append({"title": f"{e.subject.name} ({e.subject.code}) {e.get_exam_display()} syllabus", "source": "CAA syllabus (verified)",
+                     "text": e.content})
+    for ev in Event.objects.filter(is_published=True, start__gte=timezone.now())[:50]:
+        docs.append({"title": f"Event: {ev.name}", "source": "CAA events",
+                     "text": f"{ev.start:%d %b %Y %H:%M} at {ev.venue or 'venue not stated'}. {ev.description[:300]}"})
+    return docs
+
+
+class AIStatusView(APIView):
+    def get(self, request):
+        on = _ai_enabled()
+        return Response({"enabled": on, "provider": ("Google Gemini" if settings.AI_PROVIDER == "gemini" else "an external AI service") if on else "",
+                         "daily_limit": settings.AI_DAILY_LIMIT_PER_USER})
+
+
+class AIChatView(APIView):
+    throttle_scope = "ai"
+
+    def post(self, request):
+        if not _ai_enabled():
+            return Response({"detail": "The AI assistant has not been set up yet.", "code": "not_configured"}, status=503)
+        try:
+            msgs = ai_context.clean_messages(request.data.get("messages"))
+        except ValueError as e:
+            return Response({"detail": str(e), "code": "invalid"}, status=400)
+        store = caches["otp"]
+        day = timezone.localdate().isoformat()
+        ukey, gkey = f"ai:{request.user.id}:{day}", f"ai:all:{day}"
+        for k in (ukey, gkey):
+            store.add(k, 0, 90000)
+        if store.get(ukey, 0) >= settings.AI_DAILY_LIMIT_PER_USER:
+            return Response({"detail": f"You've reached today's limit of {settings.AI_DAILY_LIMIT_PER_USER} AI messages. Try again tomorrow.",
+                             "code": "daily_limit"}, status=429)
+        if store.get(gkey, 0) >= settings.AI_GLOBAL_DAILY_LIMIT:
+            return Response({"detail": "The assistant has reached its free daily capacity. Please try again tomorrow.", "code": "quota"}, status=429)
+        counted = [store.incr(ukey), store.incr(gkey)]
+        query = " ".join(m["content"] for m in msgs if m["role"] == "user")[-600:]
+        system = ai_context.build_system(ai_context.retrieve(query, _ai_docs()))
+        try:
+            reply = ai_provider.chat(_ai_cfg(), system, msgs)
+        except ai_provider.AIError as e:
+            for k in (ukey, gkey):                      # a failed call should not use up the student's allowance
+                try:
+                    store.decr(k)
+                except ValueError:
+                    pass
+            return Response({"detail": e.message, "code": e.code}, status=e.status)
+        return Response({"reply": reply, "remaining_today": max(0, settings.AI_DAILY_LIMIT_PER_USER - counted[0])})
