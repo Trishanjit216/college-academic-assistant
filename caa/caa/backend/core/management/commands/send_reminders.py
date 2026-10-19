@@ -45,7 +45,8 @@ def send_due_reminders(now=None):
                    .values_list("user_id", flat=True))
         when = localtime(a.deadline).strftime("%d %b, %I:%M %p")
         rows = [Notification(user=u, title=f"Due soon: {a.title}",
-                             message=f"{a.subject.name} assignment is due {when} (within {tightest} hours).")
+                             message=f"{a.subject.name} assignment is due {when} (within {tightest} hours).",
+                             kind="assignment", link="/assignments")
                 for u in students if u.id not in done]
         Notification.objects.bulk_create(rows)
         created += len(rows)
