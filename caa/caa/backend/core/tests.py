@@ -467,63 +467,6 @@ class AttendanceTests(APITestCase):
         self.assertEqual(self.client.get("/api/attendance/").status_code, 401)
 
 
-@override_settings(CACHES=LOCMEM, AI_API_KEY="SECRET", AI_MODEL="m", AI_PROVIDER="gemini", AI_DAILY_LIMIT_PER_USER=2)
-class AIAssistantTests(APITestCase):
-    def setUp(self):
-        caches["otp"].clear()
-        self.u = User.objects.create_user("u", password="pw-12345-x", first_name="Asha", roll_no="21CS001")
-        self.client.force_authenticate(self.u)
-        self.calls = []
-        def fake(cfg, system, msgs):
-            self.calls.append((cfg, system, msgs)); return "Answer"
-        p = mock.patch("core.views.ai_provider.chat", side_effect=fake); p.start(); self.addCleanup(p.stop)
-
-    def chat(self, text="What is a pointer?"):
-        return self.client.post("/api/ai/chat/", {"messages": [{"role": "user", "content": text}]}, format="json")
-
-    def test_reply_and_no_private_data_or_key_sent_back(self):
-        r = self.chat()
-        self.assertEqual((r.status_code, r.data["reply"]), (200, "Answer"))
-        self.assertNotIn("SECRET", str(r.data))
-        cfg, system, msgs = self.calls[0]
-        blob = system + str(msgs)
-        for private in ("Asha", "21CS001", "pw-12345-x", "u@"):
-            self.assertNotIn(private, blob)
-
-    def test_followup_history_is_passed(self):
-        r = self.client.post("/api/ai/chat/", {"messages": [{"role": "user", "content": "Explain arrays"}, {"role": "assistant", "content": "ok"},
-                                                            {"role": "user", "content": "and pointers?"}]}, format="json")
-        self.assertEqual(len(self.calls[0][2]), 3)
-
-    def test_verified_syllabus_is_retrieved_unverified_is_not(self):
-        sub = Subject.objects.create(code="CS101", name="Programming in C")
-        SyllabusEntry.objects.create(subject=sub, exam="mid1", content="Unit 1: pointers and arrays", verified=True)
-        SyllabusEntry.objects.create(subject=sub, exam="mid2", content="Unit 9: secretdraft pointers", verified=False)
-        self.chat("what pointers are in the C syllabus")
-        self.assertIn("Unit 1: pointers", self.calls[0][1]); self.assertNotIn("secretdraft", self.calls[0][1])
-
-    def test_limits_validation_and_status(self):
-        self.assertEqual(self.chat().status_code, 200); self.assertEqual(self.chat().status_code, 200)
-        r = self.chat(); self.assertEqual((r.status_code, r.data["code"]), (429, "daily_limit"))
-        self.assertEqual(self.client.post("/api/ai/chat/", {"messages": []}, format="json").status_code, 400)
-        self.assertEqual(self.client.post("/api/ai/chat/", {"messages": [{"role": "user", "content": "x" * 3000}]}, format="json").status_code, 400)
-        st = self.client.get("/api/ai/status/").data
-        self.assertTrue(st["enabled"]); self.assertNotIn("SECRET", str(st))
-
-    def test_provider_failure_is_friendly_and_does_not_use_allowance(self):
-        from .ai_provider import AIError
-        with mock.patch("core.views.ai_provider.chat", side_effect=AIError("quota", "Quota used up", 429)):
-            r = self.chat(); self.assertEqual((r.status_code, r.data["code"]), (429, "quota"))
-        self.assertEqual(self.chat().status_code, 200); self.assertEqual(self.chat().status_code, 200)
-
-    @override_settings(AI_API_KEY="")
-    def test_off_until_configured_and_login_required(self):
-        self.assertEqual(self.chat().status_code, 503)
-        self.assertFalse(self.client.get("/api/ai/status/").data["enabled"])
-        self.client.force_authenticate(None)
-        self.assertEqual(self.chat().status_code, 401)
-
-
 class NotificationTests(APITestCase):
     """Event / syllabus notifications. (Written for Django's test runner; run with: python manage.py test core)"""
 

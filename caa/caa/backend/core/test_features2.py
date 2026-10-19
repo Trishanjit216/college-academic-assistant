@@ -1,7 +1,9 @@
 """Pure-Python tests (no Django):  cd backend && python3 -m unittest core.test_features2"""
+import json
+import threading
 import unittest
-
 from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from . import allotment, attendance_calc as ac, pdf_extract
 
@@ -142,7 +144,3 @@ class Attendance(unittest.TestCase):
         txt = " ".join(s["insights"])
         self.assertIn("estimate", txt); self.assertIn("recorded 1 absence", txt)
         self.assertIn("not your official", s["target"]["note"])
-
-
-if __name__ == "__main__":
-    unittest.main()
