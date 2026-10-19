@@ -28,7 +28,6 @@ function groupsFor(user) {
       ...(FACULTY_URL ? [{ href: FACULTY_URL, label: "Know Your Faculty", icon: "user" }] : []),
     ] },
     { label: "Community", items: [
-      { to: "/assistant", label: "AI Assistant", icon: "discussion" },
       { to: "/discussion", label: "Discussion", icon: "discussion" },
       { to: "/notifications", label: "Notifications", icon: "bell" },
     ] },
