@@ -417,3 +417,51 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 }
 .att-filter-grid .field { align-content: start; }
 .att-filter-grid select, .att-filter-grid input { min-width: 0; }
+
+/* ---- AI assistant ---- */
+.ai-page .form-info { margin: var(--s4) 0; }
+.ai-chat { display: grid; gap: var(--s3); padding: 0; overflow: hidden; }
+.ai-log { display: grid; gap: var(--s3); padding: var(--s4); min-height: 280px; max-height: min(60vh, 560px); overflow-y: auto; align-content: start; }
+.ai-msg { display: grid; gap: 4px; max-width: 88%; padding: var(--s3) var(--s4); border-radius: var(--r-lg); border: 1px solid var(--border); }
+.ai-user { justify-self: end; background: var(--primary-soft); border-color: transparent; }
+.ai-assistant { justify-self: start; background: var(--surface-2); }
+.ai-who { font-size: .72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.ai-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ai-code { margin: 0; padding: var(--s3); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); overflow-x: auto; font-size: .84rem; }
+.ai-empty { display: grid; gap: var(--s2); text-align: center; justify-items: center; padding: var(--s4) 0; }
+.ai-starters { display: flex; flex-wrap: wrap; gap: var(--s2); justify-content: center; }
+.chip { border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); border-radius: 999px; padding: 8px 14px; font: inherit; font-size: .85rem; cursor: pointer; text-align: left; }
+.chip:hover { background: var(--primary-soft); }
+.ai-error { margin: 0; align-items: center; flex-wrap: wrap; }
+.ai-error span { flex: 1 1 200px; }
+.ai-form { display: grid; gap: var(--s2); padding: 0 var(--s4) var(--s4); }
+.ai-form textarea { min-height: 64px; max-height: 200px; }
+.ai-bar { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.ai-over { color: var(--danger); }
+@media (max-width: 800px) { .ai-msg { max-width: 96%; } .ai-log { max-height: 55vh; } }
+
+/* ---- notifications: bell + drawer ---- */
+.topbar-actions { display: flex; align-items: center; gap: 2px; }
+.bell-btn { position: relative; }
+.bell-count { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--danger); color: #fff; font-size: .68rem; font-weight: 700; line-height: 18px; text-align: center; }
+.drawer-wrap { position: fixed; inset: 0; z-index: 70; }
+.drawer-wrap .scrim { display: block; position: absolute; inset: 0; z-index: 1; background: rgba(8, 12, 24, .55); }
+.drawer { position: absolute; z-index: 2; top: 0; right: 0; bottom: 0; width: min(420px, 100%); display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow-md); }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; padding: var(--s4); border-bottom: 1px solid var(--border); }
+.drawer-tools { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border); }
+.drawer-body { flex: 1; overflow-y: auto; }
+.drawer .form-error { margin: var(--s3) var(--s4) 0; align-items: center; }
+.drawer-foot { padding: var(--s3) var(--s4); border-top: 1px solid var(--border); text-align: center; }
+.notif-list { list-style: none; margin: 0; }
+.notif { border-bottom: 1px solid var(--border); padding: var(--s3) var(--s4); display: grid; gap: 6px; }
+.notif.is-unread { background: var(--primary-soft); }
+.notif.is-read { opacity: .8; }
+.notif-main { display: grid; gap: 4px; width: 100%; text-align: left; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.notif-title { font-weight: 600; overflow-wrap: anywhere; display: flex; align-items: baseline; gap: 6px; }
+.notif.is-read .notif-title { font-weight: 500; }
+.notif-msg { white-space: pre-line; overflow-wrap: anywhere; font-size: .875rem; color: var(--text-2); }
+.notif-meta { font-size: .78rem; }
+.notif-actions { display: flex; justify-content: flex-end; }
+.notif-pre { white-space: pre-line; }
+.notif-card.is-unread { border-left: 3px solid var(--primary); }
+.is-target { box-shadow: 0 0 0 2px var(--primary); }

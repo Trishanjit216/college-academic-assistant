@@ -4,6 +4,7 @@ import Icon from "./icons.jsx";
 import { useTheme } from "./theme.js";
 import { safeUrl } from "./pages/ui.jsx";
 import { missingFields } from "./sections.js";
+import { BellButton, NotificationDrawer, useNotifications } from "./notifications.jsx";
 
 export const FACULTY_URL = safeUrl(import.meta.env.VITE_FACULTY_URL);
 const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
@@ -27,6 +28,7 @@ function groupsFor(user) {
       ...(FACULTY_URL ? [{ href: FACULTY_URL, label: "Know Your Faculty", icon: "user" }] : []),
     ] },
     { label: "Community", items: [
+      { to: "/assistant", label: "AI Assistant", icon: "discussion" },
       { to: "/discussion", label: "Discussion", icon: "discussion" },
       { to: "/notifications", label: "Notifications", icon: "bell" },
     ] },
@@ -49,6 +51,7 @@ export default function Shell({ user, onLogout, children }) {
   const menuBtn = useRef(null);
   const closeBtn = useRef(null);
   const wasOpen = useRef(false);
+  const notif = useNotifications();
 
   useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {
@@ -73,9 +76,12 @@ export default function Shell({ user, onLogout, children }) {
           <Icon name="menu" />
         </button>
         <div className="brand brand-sm"><span className="brand-mark"><Icon name="logo" size={18} /></span><span>Academic Assistant</span></div>
-        <button className="icon-btn" aria-label={themeLabel} onClick={toggleTheme}>
-          <Icon name={theme === "dark" ? "sun" : "moon"} />
-        </button>
+        <div className="topbar-actions">
+          <BellButton unread={notif.unread} onClick={() => notif.setOpen(true)} />
+          <button className="icon-btn" aria-label={themeLabel} onClick={toggleTheme}>
+            <Icon name={theme === "dark" ? "sun" : "moon"} />
+          </button>
+        </div>
       </header>
 
       {open && <div className="scrim" onClick={() => setOpen(false)} />}
@@ -119,6 +125,7 @@ export default function Shell({ user, onLogout, children }) {
             </NavLink>
           </div>
           <div className="foot-actions">
+            <BellButton className="only-desktop" unread={notif.unread} onClick={() => notif.setOpen(true)} />
             <button className="icon-btn only-desktop" aria-label={themeLabel} onClick={toggleTheme}>
               <Icon name={theme === "dark" ? "sun" : "moon"} />
             </button>
@@ -139,6 +146,7 @@ export default function Shell({ user, onLogout, children }) {
           {children}
         </div>
       </main>
+      <NotificationDrawer n={notif} />
     </div>
   );
 }
