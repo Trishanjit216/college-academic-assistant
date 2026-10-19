@@ -60,6 +60,16 @@ DATABASES = {
     )
 }
 
+# AI assistant (all optional; the assistant stays switched off until AI_API_KEY is set). Keys live only here.
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini")            # gemini | openai (any OpenAI-compatible endpoint)
+AI_API_KEY = os.environ.get("AI_API_KEY", "")
+AI_MODEL = os.environ.get("AI_MODEL", "")                        # e.g. a free-tier Gemini model id from Google AI Studio
+AI_BASE_URL = os.environ.get("AI_BASE_URL", "")                  # only for AI_PROVIDER=openai
+AI_MAX_OUTPUT_TOKENS = int(os.environ.get("AI_MAX_OUTPUT_TOKENS", "800"))
+AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "25"))
+AI_DAILY_LIMIT_PER_USER = int(os.environ.get("AI_DAILY_LIMIT_PER_USER", "30"))
+AI_GLOBAL_DAILY_LIMIT = int(os.environ.get("AI_GLOBAL_DAILY_LIMIT", "400"))
+
 AUTH_USER_MODEL = "core.User"
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -98,7 +108,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "posts": "30/hour"},
+    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "ai": "20/hour", "posts": "30/hour"},
 }
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
@@ -110,3 +120,6 @@ if not DEBUG:
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+
+# Notifications: by default a syllabus entry notifies students only once it is VERIFIED. Set to 1 to notify on any saved content.
+NOTIFY_ON_UNVERIFIED_SYLLABUS = os.environ.get("NOTIFY_ON_UNVERIFIED_SYLLABUS", "0") == "1"
