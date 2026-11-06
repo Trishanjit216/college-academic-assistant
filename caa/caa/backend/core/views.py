@@ -28,9 +28,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from . import serializers as s
 from .models import (AllotmentRow, AttendanceRecord, Exam, ExamDocument, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, Report, Subject,
+                     FormGuide, Group, Lab, Notification, Post, PushDevice, PushPreference, Report, Subject,
                      SyllabusEntry)
 from . import allotment, attendance_calc, otp, pdf_extract
+from . import push as fcm
 from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import IsModerator, ReadAllEditorsWrite
 
@@ -743,3 +744,66 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
         resp["Content-Disposition"] = 'attachment; filename="my-attendance.csv"'
         return resp
+
+
+# =====================================================================
+#  Phone push notifications (Firebase Cloud Messaging). Tokens are never returned by any endpoint.
+# =====================================================================
+def _push_prefs(user):
+    p = PushPreference.objects.filter(user=user).first()
+    return {"events": p.events if p else True, "syllabus": p.syllabus if p else True}
+
+
+class PushStatusView(APIView):
+    def get(self, request):
+        return Response({"configured": fcm.configured(), "devices": request.user.push_devices.count(), **_push_prefs(request.user)})
+
+
+class PushRegisterView(APIView):
+    """The logged-in user's browser gives us its FCM token. A token belongs to exactly one account at a time."""
+    throttle_scope = "push"
+
+    def post(self, request):
+        token = fcm.clean_token(request.data.get("token"))
+        if not token:
+            return Response({"detail": "That doesn't look like a valid device token.", "code": "bad_token"}, status=400)
+        PushDevice.objects.update_or_create(token=token, defaults={"user": request.user, "user_agent": request.META.get("HTTP_USER_AGENT", "")[:200]})
+        return Response({"ok": True})
+
+
+class PushUnregisterView(APIView):
+    throttle_scope = "push"
+
+    def post(self, request):
+        token = fcm.clean_token(request.data.get("token"))
+        if token:
+            PushDevice.objects.filter(user=request.user, token=token).delete()      # only ever your own device
+        return Response({"ok": True})
+
+
+class PushPreferencesView(APIView):
+    throttle_scope = "push"
+
+    def post(self, request):
+        vals = {k: request.data[k] for k in ("events", "syllabus") if k in request.data}
+        if any(not isinstance(v, bool) for v in vals.values()):
+            return Response({"detail": "Preferences must be true or false."}, status=400)
+        PushPreference.objects.update_or_create(user=request.user, defaults=vals)
+        return Response(_push_prefs(request.user))
+
+
+class PushTestView(APIView):
+    """Send a test alert to your own devices only."""
+    throttle_scope = "push"
+
+    def post(self, request):
+        sender = fcm.get_sender()
+        if not sender:
+            return Response({"detail": "Phone notifications have not been set up on the server yet.", "code": "not_configured"}, status=503)
+        tokens = list(request.user.push_devices.values_list("token", flat=True))
+        if not tokens:
+            return Response({"detail": "No phone is registered for your account yet. Tap Enable first.", "code": "no_device"}, status=400)
+        res = fcm.send_many(sender, tokens, "CAA test notification", "Phone notifications are working. You can switch them off any time from the Notifications page.",
+                            "/notifications", tag=f"test:{int(timezone.now().timestamp())}", kind="test")
+        fcm.forget(res["dead"])
+        return Response({"sent": res["sent"], "failed": res["failed"], "removed": len(res["dead"])})

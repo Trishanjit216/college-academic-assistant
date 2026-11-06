@@ -6,9 +6,9 @@ database treats the regenerated 0001 as applied, so models/columns added later w
 nothing on a database that is already up to date (including a fresh one built by `migrate`)."""
 from django.db import connection
 
-from .models import AllotmentRow, AttendanceRecord, Event, Exam, ExamDocument, ExamManager, Notification, SyllabusEntry, User
+from .models import AllotmentRow, AttendanceRecord, Event, Exam, ExamDocument, ExamManager, Notification, PushDevice, PushPreference, SyllabusEntry, User
 
-NEW_MODELS = (SyllabusEntry, Exam, ExamDocument, ExamManager, AllotmentRow, AttendanceRecord)   # order matters (FKs)
+NEW_MODELS = (SyllabusEntry, Exam, ExamDocument, ExamManager, AllotmentRow, AttendanceRecord, PushDevice, PushPreference)   # order matters (FKs)
 
 
 # columns added to tables that already exist on a deployed database

@@ -152,6 +152,22 @@ class Notification(models.Model):
                                                name="core_notif_user_dedupe_uniq")]
 
 
+class PushDevice(models.Model):
+    """One browser/phone that agreed to receive push alerts (an FCM registration token). Tokens are secrets: never exposed by the API."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="push_devices")
+    token = models.CharField(max_length=512, unique=True)
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
+
+
+class PushPreference(models.Model):
+    """Which kinds of phone alerts a user wants. No row = everything on."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="push_pref")
+    events = models.BooleanField(default=True)
+    syllabus = models.BooleanField(default=True)
+
+
 class Event(models.Model):
     name = models.CharField(max_length=200)
     start = models.DateTimeField()

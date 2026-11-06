@@ -7,3 +7,4 @@ gunicorn>=22.0
 dj-database-url>=2.2
 psycopg[binary]>=3.2
 pypdf>=4.2
+google-auth[requests]>=2.30

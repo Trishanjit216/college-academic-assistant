@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .management.commands.send_reminders import send_due_reminders
-from .models import AllotmentRow, Assignment, AttendanceRecord, Event, Exam, ExamManager, Group, Notification, Post, Subject, SyllabusEntry, User
+from .models import AllotmentRow, Assignment, AttendanceRecord, Event, Exam, ExamManager, Group, Notification, Post, PushDevice, PushPreference, Subject, SyllabusEntry, User
 
 
 class AuthAndPermissionTests(APITestCase):
@@ -635,3 +635,156 @@ class NotificationTests(APITestCase):
         Notification.objects.create(user=self.s1, title="c", dedupe_key="")           # blank keys are unlimited
         Notification.objects.create(user=self.s1, title="d", dedupe_key="")
 
+
+class FakeSender:
+    """Stands in for Firebase: records every message instead of calling the network."""
+    def __init__(self):
+        self.sent, self.dead = [], set()
+
+    def send(self, message):
+        self.sent.append(message["message"])
+        return "dead" if message["message"]["token"] in self.dead else "ok"
+
+
+def tok(n):
+    return f"device-token-{n:02d}-" + "x" * 30
+
+
+@override_settings(CACHES=LOCMEM)
+class PushTests(APITestCase):
+    """Phone push. Firebase itself is faked; a real delivery test needs a real Firebase project and phone."""
+
+    def setUp(self):
+        self.ga, self.gb = Group.objects.create(name="Group A"), Group.objects.create(name="Group B")
+        mk = lambda name, **kw: User.objects.create_user(name, password="pw-12345-x", **kw)
+        self.s1 = mk("s1", group=self.ga, section="A1", roll_no="1")
+        self.s2 = mk("s2", group=self.ga, section="A2", roll_no="2")
+        self.s3 = mk("s3", group=self.gb, section="B1", roll_no="3")
+        self.fac = mk("fac", role="faculty")
+        self.sub = Subject.objects.create(code="MA101", name="Maths")
+        self.when = timezone.now() + timedelta(days=3)
+        self.fake = FakeSender()
+        for p in (mock.patch("core.push.get_sender", return_value=self.fake), mock.patch("core.push._start", side_effect=lambda fn: fn())):
+            p.start(); self.addCleanup(p.stop)
+        for i, u in enumerate((self.s1, self.s2, self.s3), 1):
+            PushDevice.objects.create(user=u, token=tok(i))
+
+    def publish_event(self, **kw):
+        with self.captureOnCommitCallbacks(execute=True):
+            return Event.objects.create(name="Hackathon", start=self.when, description="Build things", **kw)
+
+    def tokens(self):
+        return sorted(m["token"] for m in self.fake.sent)
+
+    # ---- registration API ----
+    def test_register_unregister_and_privacy(self):
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(self.client.post("/api/push/register/", {"token": tok(9)}, format="json").status_code, 200)
+        self.assertEqual(PushDevice.objects.get(token=tok(9)).user, self.fac)
+        self.assertEqual(self.client.post("/api/push/register/", {"token": "bad"}, format="json").status_code, 400)
+        self.client.force_authenticate(self.s1)                                  # taking over a token moves it, never duplicates it
+        self.client.post("/api/push/register/", {"token": tok(9)}, format="json")
+        self.assertEqual(PushDevice.objects.filter(token=tok(9)).count(), 1)
+        self.client.force_authenticate(self.s2)                                  # cannot remove somebody else's device
+        self.client.post("/api/push/unregister/", {"token": tok(9)}, format="json")
+        self.assertTrue(PushDevice.objects.filter(token=tok(9)).exists())
+        self.client.force_authenticate(self.s1)
+        self.client.post("/api/push/unregister/", {"token": tok(9)}, format="json")
+        self.assertFalse(PushDevice.objects.filter(token=tok(9)).exists())
+        st = self.client.get("/api/push/status/")
+        self.assertNotIn("token", str(st.data))
+        self.client.force_authenticate(None)
+        for path in ("status", "register", "unregister", "preferences", "test"):
+            self.assertEqual(self.client.generic("GET" if path == "status" else "POST", f"/api/push/{path}/").status_code, 401)
+
+    def test_preferences(self):
+        self.client.force_authenticate(self.s1)
+        self.assertEqual(self.client.get("/api/push/status/").data["events"], True)
+        r = self.client.post("/api/push/preferences/", {"events": False}, format="json")
+        self.assertEqual((r.data["events"], r.data["syllabus"]), (False, True))
+        self.assertEqual(self.client.post("/api/push/preferences/", {"events": "no"}, format="json").status_code, 400)
+
+    # ---- sending on publish ----
+    def test_event_push_goes_to_subscribed_audience_only(self):
+        e = self.publish_event(target_group=self.ga)
+        self.assertEqual(self.tokens(), [tok(1), tok(2)])                        # Group A only
+        m = self.fake.sent[0]
+        self.assertEqual(m["data"]["link"], f"/events?event={e.pk}")
+        self.assertIn("Hackathon", m["data"]["title"]); self.assertNotIn("notification", m)
+
+    def test_sections_and_everyone(self):
+        self.publish_event(target_sections="B1")
+        self.assertEqual(self.tokens(), [tok(3)])
+        self.fake.sent.clear()
+        self.publish_event()
+        self.assertEqual(self.tokens(), [tok(1), tok(2), tok(3)])
+        PushDevice.objects.create(user=self.fac, token=tok(7))                   # faculty are not in the audience
+        self.fake.sent.clear(); self.publish_event()
+        self.assertNotIn(tok(7), self.tokens())
+
+    def test_draft_and_repeat_saves_send_nothing(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            e = Event.objects.create(name="Draft", start=self.when, is_published=False)
+        self.assertEqual(self.fake.sent, [])
+        with self.captureOnCommitCallbacks(execute=True):
+            e.is_published = True; e.save()
+        self.assertEqual(len(self.fake.sent), 3)
+        with self.captureOnCommitCallbacks(execute=True):
+            e.save(); e.save(); e.description = "note"; e.save()
+        self.assertEqual(len(self.fake.sent), 3)
+
+    def test_preferences_and_missing_devices_respected(self):
+        PushPreference.objects.create(user=self.s1, events=False)
+        PushDevice.objects.filter(user=self.s2).delete()
+        self.publish_event()
+        self.assertEqual(self.tokens(), [tok(3)])
+        self.assertEqual(Notification.objects.filter(kind="event").count(), 3)    # the in-app bell is unaffected
+
+    def test_syllabus_published_updated_unchanged(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            ent = SyllabusEntry.objects.create(subject=self.sub, exam="mid1", content="Limits\nDerivatives", verified=True)
+        self.assertEqual(len(self.fake.sent), 3)
+        self.assertIn("Maths", self.fake.sent[0]["data"]["title"] + self.fake.sent[0]["data"]["body"])
+        self.assertEqual(self.fake.sent[0]["data"]["link"], f"/syllabus?subject={self.sub.pk}&exam=mid1")
+        self.fake.sent.clear()
+        with self.captureOnCommitCallbacks(execute=True):
+            ent.content = "Limits   \nDerivatives"; ent.save()                      # whitespace only
+        self.assertEqual(self.fake.sent, [])
+        with self.captureOnCommitCallbacks(execute=True):
+            ent.content = "Limits\nDerivatives\nIntegrals"; ent.save()
+        self.assertEqual(len(self.fake.sent), 3)
+        self.assertIn("updated", self.fake.sent[0]["data"]["title"].lower())
+        self.fake.sent.clear()
+        with self.captureOnCommitCallbacks(execute=True):
+            SyllabusEntry.objects.create(subject=self.sub, exam="end", content="Draft", verified=False)
+        self.assertEqual(self.fake.sent, [])
+
+    def test_dead_token_removed_and_publish_still_succeeds(self):
+        self.fake.dead.add(tok(2))
+        self.publish_event()
+        self.assertFalse(PushDevice.objects.filter(token=tok(2)).exists())
+        self.assertTrue(PushDevice.objects.filter(token=tok(1)).exists())
+        self.assertEqual(Notification.objects.filter(kind="event").count(), 3)
+
+    def test_not_configured_means_no_push_but_everything_else_works(self):
+        with mock.patch("core.push.get_sender", return_value=None):
+            self.publish_event()
+        self.assertEqual(self.fake.sent, [])
+        self.assertEqual(Notification.objects.filter(kind="event").count(), 3)
+
+    def test_push_failure_never_blocks_publishing(self):
+        with mock.patch("core.push.device_tokens", side_effect=RuntimeError("db down")):
+            self.publish_event()
+        self.assertEqual(Notification.objects.filter(kind="event").count(), 3)
+
+    # ---- test button ----
+    def test_test_notification_goes_to_own_devices_only(self):
+        self.client.force_authenticate(self.s1)
+        r = self.client.post("/api/push/test/")
+        self.assertEqual((r.status_code, r.data["sent"]), (200, 1))
+        self.assertEqual(self.tokens(), [tok(1)])
+        self.client.force_authenticate(self.fac)
+        self.assertEqual(self.client.post("/api/push/test/").status_code, 400)    # no device registered
+        with mock.patch("core.push.get_sender", return_value=None):
+            self.client.force_authenticate(self.s1)
+            self.assertEqual(self.client.post("/api/push/test/").status_code, 503)
