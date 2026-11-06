@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import Icon from "../icons.jsx";
 import { useToast } from "../toast.jsx";
 import { CHANGED } from "../notifications.jsx";
+import PushSettings from "../PushSettings.jsx";
 import { Badge, Button, Linkify, ListPage, dueInfo, fmtD, fmtDT } from "./ui.jsx";
 
 const STATUS_TONE = { completed: "success", ongoing: "primary", planned: "neutral" };
@@ -249,6 +250,7 @@ export const Notifications = () => (
     description="New events, syllabus updates and assignment reminders."
     path="/notifications/"
     searchable={false}
+    top={<PushSettings />}
     actions={(reload, items) => <MarkAllRead reload={reload} items={items} />}
     empty={{ title: "You're all caught up", text: "New events, syllabus updates and deadline reminders will show up here." }}
     render={(n, reload) => <NotificationCard key={n.id} n={n} reload={reload} />}

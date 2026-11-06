@@ -465,3 +465,15 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .notif-pre { white-space: pre-line; }
 .notif-card.is-unread { border-left: 3px solid var(--primary); }
 .is-target { box-shadow: 0 0 0 2px var(--primary); }
+
+/* ---------- phone push settings ---------- */
+.push-card { margin-bottom: var(--s4); display: grid; gap: var(--s3); }
+.push-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; }
+.push-title { font-size: 1.05rem; margin: 0; }
+.push-note { margin: 0; }
+.push-list { margin: 0; padding-left: 1.2rem; display: grid; gap: var(--s1); }
+.push-prefs { display: grid; gap: var(--s2); }
+.push-prefs .check { display: flex; align-items: center; gap: var(--s2); min-height: 40px; cursor: pointer; }
+.push-prefs input { width: 20px; height: 20px; accent-color: var(--primary); }
+.push-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.push-warn { margin: 0; padding: var(--s2) var(--s3); border-radius: var(--r-md); background: var(--warning-soft); color: var(--warning); font-size: .92rem; }

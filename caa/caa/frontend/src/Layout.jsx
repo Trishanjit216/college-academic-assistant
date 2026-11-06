@@ -1,3 +1,4 @@
+import { usePushBackground } from "./PushSettings.jsx";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import Icon from "./icons.jsx";
@@ -51,6 +52,7 @@ export default function Shell({ user, onLogout, children }) {
   const closeBtn = useRef(null);
   const wasOpen = useRef(false);
   const notif = useNotifications();
+  usePushBackground();
 
   useEffect(() => { setOpen(false); }, [pathname]);
   useEffect(() => {

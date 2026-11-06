@@ -1,3 +1,4 @@
+import { leaveDevice } from "./push.js";
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { api, tokens } from "./api.js";
@@ -36,7 +37,7 @@ export default function App() {
 
   const canModerate = ["admin", "moderator"].includes(user.role);
   return (
-    <Shell user={user} onLogout={() => { tokens.clear(); setUser(null); nav("/login"); }}>
+    <Shell user={user} onLogout={() => { leaveDevice().finally(() => { tokens.clear(); setUser(null); nav("/login"); }); }}>
       <Routes>
         <Route path="/" element={<Dashboard user={user} />} />
         <Route path="/records" element={<Records />} />
