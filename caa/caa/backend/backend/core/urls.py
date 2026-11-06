@@ -22,6 +22,11 @@ router.register("attendance", v.AttendanceViewSet, basename="attendance")
 router.register("manage/rows", v.AllotmentRowViewSet, basename="manage-row")
 
 urlpatterns = [
+    path("push/status/", v.PushStatusView.as_view()),
+    path("push/register/", v.PushRegisterView.as_view()),
+    path("push/unregister/", v.PushUnregisterView.as_view()),
+    path("push/preferences/", v.PushPreferencesView.as_view()),
+    path("push/test/", v.PushTestView.as_view()),
     path("auth/token/", v.ThrottledTokenView.as_view()),
     path("auth/refresh/", TokenRefreshView.as_view()),
     path("auth/register/", v.SignupView.as_view()),

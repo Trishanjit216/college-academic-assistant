@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
 from .models import (AllotmentRow, Exam, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, ReminderLog, Report, Subject, SyllabusEntry, User)
+                     FormGuide, Group, Lab, Notification, Post, PushDevice, ReminderLog, Report, Subject, SyllabusEntry, User)
 
 
 @admin.register(User)
@@ -131,3 +131,15 @@ class ExamAdmin(admin.ModelAdmin):
 
 
 admin.site.register([Group, Notification, ReminderLog, AssignmentProgress])
+
+
+@admin.register(PushDevice)
+class PushDeviceAdmin(admin.ModelAdmin):
+    """Who has phone alerts switched on. The secret device token is deliberately not shown."""
+    list_display = ("user", "user_agent", "created_at", "last_seen")
+    search_fields = ("user__username", "user__email")
+    fields = ("user", "user_agent", "created_at", "last_seen")
+    readonly_fields = ("user", "user_agent", "created_at", "last_seen")
+
+    def has_add_permission(self, request):
+        return False

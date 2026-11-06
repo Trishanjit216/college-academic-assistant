@@ -98,7 +98,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "posts": "30/hour"},
+    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "posts": "30/hour", "push": "30/hour"},
 }
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
@@ -112,4 +112,6 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
 
 # Notifications: by default a syllabus entry notifies students only once it is VERIFIED. Set to 1 to notify on any saved content.
+# Phone push (Firebase Cloud Messaging). Paste the service-account JSON into this ONE server variable; it never goes to the frontend or GitHub.
+FCM_SERVICE_ACCOUNT_JSON = os.environ.get("FCM_SERVICE_ACCOUNT_JSON", "")
 NOTIFY_ON_UNVERIFIED_SYLLABUS = os.environ.get("NOTIFY_ON_UNVERIFIED_SYLLABUS", "0") == "1"

@@ -133,18 +133,33 @@ def event_recipients(event):
 
 
 def _bulk(users, **fields):
-    """Insert one notification per user; the unique (user, dedupe_key) constraint silently drops repeats."""
+    """Insert one notification per user; the unique (user, dedupe_key) constraint silently drops repeats.
+    Returns the ids of the users who really got a NEW notification (so phone push goes only to them)."""
     _, Notification, _, _ = _models()
     ids = list(users.values_list("id", flat=True)) if hasattr(users, "values_list") else list(users)
-    Notification.objects.bulk_create([Notification(user_id=i, **fields) for i in ids], ignore_conflicts=True, batch_size=500)
-    return len(ids)
+    key = fields.get("dedupe_key", "")
+    have = set(Notification.objects.filter(user_id__in=ids, dedupe_key=key).values_list("user_id", flat=True)) if key else set()
+    new = [i for i in ids if i not in have]
+    Notification.objects.bulk_create([Notification(user_id=i, **fields) for i in new], ignore_conflicts=True, batch_size=500)
+    return new
+
+
+def _push(new_ids, kind, title, message, link, tag):
+    """Phone push for the people who just got a new in-app notification. A push problem never blocks publishing."""
+    try:
+        from . import push
+        push.dispatch(new_ids, kind, title, message, link, tag)
+    except Exception:
+        log.exception("push dispatch failed")
 
 
 def notify_event_published(event):
     from django.utils import timezone
     title, msg = event_text(event.name, timezone.localtime(event.start), event.venue, event.description, timezone.localdate())
-    return _bulk(event_recipients(event), kind="event", title=title[:200], message=msg, link=event_link(event.pk),
-                 ref=f"event:{event.pk}", dedupe_key=f"event:{event.pk}:published")
+    link, key = event_link(event.pk), f"event:{event.pk}:published"
+    new = _bulk(event_recipients(event), kind="event", title=title[:200], message=msg, link=link, ref=f"event:{event.pk}", dedupe_key=key)
+    _push(new, "event", title[:200], msg, link, key)
+    return len(new)
 
 
 def notify_syllabus(entry, plan):
@@ -152,8 +167,10 @@ def notify_syllabus(entry, plan):
     _, _, _, User = _models()
     title, msg = syllabus_text(plan, entry.subject.name, entry.get_exam_display(), timezone.localdate())
     users = User.objects.filter(is_active=True, role__in=[User.STUDENT, User.MODERATOR])
-    return _bulk(users, kind="syllabus", title=title[:200], message=msg, link=syllabus_link(entry.subject_id, entry.exam),
-                 ref=f"syllabus:{entry.pk}", dedupe_key=f"syllabus:{entry.pk}:r{entry.revision}")
+    link, key = syllabus_link(entry.subject_id, entry.exam), f"syllabus:{entry.pk}:r{entry.revision}"
+    new = _bulk(users, kind="syllabus", title=title[:200], message=msg, link=link, ref=f"syllabus:{entry.pk}", dedupe_key=key)
+    _push(new, "syllabus", title[:200], msg, link, key)
+    return len(new)
 
 
 def remove_for(ref):
