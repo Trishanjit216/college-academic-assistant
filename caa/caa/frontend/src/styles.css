@@ -67,6 +67,8 @@ ul { margin: 0; padding: 0; }
 .skip-link { position: absolute; left: var(--s3); top: -60px; z-index: 100; background: var(--primary); color: var(--on-primary); padding: var(--s2) var(--s4); border-radius: var(--r-md); }
 .skip-link:focus { top: var(--s3); }
 .boot { display: grid; place-items: center; min-height: 100vh; color: var(--muted); }
+.boot-logo { display: grid; justify-items: center; gap: var(--s3); }
+.boot-logo .brand-mark { width: 84px; height: 84px; border-radius: 18px; box-shadow: var(--shadow-md); }
 .stack { display: grid; gap: var(--s3); }
 
 /* ============ Buttons & fields ============ */
@@ -155,9 +157,10 @@ details.more summary { cursor: pointer; font-weight: 600; font-size: .875rem; co
 .sidebar-top { display: flex; justify-content: space-between; align-items: center; padding: var(--s4) var(--s4) var(--s3); }
 .brand { display: flex; align-items: center; gap: var(--s3); font-weight: 700; line-height: 1.2; }
 .brand-text { font-size: .95rem; }
-.brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--r-md); background: var(--primary); color: var(--on-primary); flex: none; }
+.brand-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--r-md); background: #fff; border: 1px solid var(--border); flex: none; overflow: hidden; }
+.brand-mark .logo-img, .fac-brand-mark .logo-img, .fac-top-mark .logo-img { width: 86%; height: 86%; object-fit: contain; display: block; }
 .brand-sm { font-size: .95rem; }
-.brand-sm .brand-mark { width: 30px; height: 30px; }
+.brand-sm .brand-mark { width: 34px; height: 34px; }
 .nav { flex: 1; overflow-y: auto; padding: var(--s2) var(--s3) var(--s4); }
 .nav-group { margin-top: var(--s4); }
 .nav-label { padding: 0 var(--s3) 6px; font-size: .78rem; font-weight: 600; color: var(--muted); }
@@ -265,7 +268,7 @@ details.more summary { cursor: pointer; font-weight: 600; font-size: .875rem; co
 /* ============ Auth ============ */
 .auth-wrap { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .auth-brand { background: var(--hero-bg); color: var(--hero-fg); padding: var(--s7) var(--s7); display: flex; flex-direction: column; justify-content: center; gap: var(--s5); }
-.auth-brand .brand-mark { background: #fff; color: #1e1b4b; }
+.auth-brand .brand-mark { width: 52px; height: 52px; border-color: transparent; }
 .auth-brand h1 { font-size: 2rem; max-width: 18ch; color: #fff; }
 .auth-brand p { color: var(--hero-sub); max-width: 44ch; }
 .auth-points { list-style: none; display: grid; gap: var(--s3); color: #e0e7ff; }
@@ -485,7 +488,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .fac-brand { display: flex; align-items: center; gap: var(--s3); }
 .fac-brand strong { display: block; color: #fff; font-size: 1rem; }
 .fac-brand small { color: #94a3b8; font-size: .72rem; }
-.fac-brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: var(--fac-accent); color: #04211d; }
+.fac-brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: #fff; overflow: hidden; flex: none; }
 .fac-close { color: #e2e8f0; }
 .fac-nav { display: grid; gap: 4px; padding: var(--s2) var(--s3); flex: 1; align-content: start; }
 .fac-link { display: flex; align-items: center; gap: var(--s3); padding: 10px 12px; border-radius: var(--r-md); color: #cbd5e1; text-decoration: none; font-weight: 500; border-left: 3px solid transparent; }
@@ -512,7 +515,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   .fac-topbar { display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 30; height: 56px; padding: 0 var(--s3); background: var(--fac-side); color: #fff; }
   .fac-topbar .icon-btn { color: #e2e8f0; }
   .fac-top-title { display: flex; align-items: center; gap: var(--s2); font-weight: 700; color: #fff; }
-  .fac-top-title svg { color: var(--fac-accent); }
+  .fac-top-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: #fff; overflow: hidden; }
   .fac-top-actions { display: flex; }
   .fac-side { transform: translateX(-100%); visibility: hidden; max-width: 86vw; transition: transform .2s ease, visibility 0s linear .2s; }
   .fac-side.is-open { transform: none; visibility: visible; transition: transform .2s ease; }
@@ -555,7 +558,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 /* faculty login */
 .fac-auth { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .fac-auth-side { background: linear-gradient(160deg, #0f172a, #115e59); color: #fff; padding: var(--s7); display: flex; flex-direction: column; justify-content: center; gap: var(--s5); }
-.fac-auth-side .brand-mark { background: #2dd4bf; color: #04211d; }
+.fac-auth-side .brand-mark { width: 52px; height: 52px; border-color: transparent; }
 .fac-auth-side h1 { color: #fff; font-size: 2rem; }
 .fac-auth-side p { color: #99f6e4; max-width: 44ch; }
 .fac-points { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); color: #ccfbf1; }

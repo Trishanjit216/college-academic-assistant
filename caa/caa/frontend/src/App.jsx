@@ -1,3 +1,4 @@
+import Logo from "./Logo.jsx";
 import { leaveDevice } from "./push.js";
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
@@ -29,7 +30,7 @@ export default function App() {
     return () => window.removeEventListener("caa-logout", out);
   }, []);
 
-  if (!ready) return <div className="boot" role="status">Loading…</div>;
+  if (!ready) return <div className="boot" role="status"><div className="boot-logo"><span className="brand-mark"><Logo size={72} /></span><span>Loading…</span></div></div>;
   if (!user) return (
     <Routes>
       <Route path="/login" element={<Auth onDone={() => { load().then(() => nav("/")); }} />} />

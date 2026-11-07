@@ -1,6 +1,7 @@
 import { usePushBackground } from "./PushSettings.jsx";
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import Logo from "./Logo.jsx";
 import Icon from "./icons.jsx";
 import { useTheme } from "./theme.js";
 import { safeUrl } from "./pages/ui.jsx";
@@ -76,7 +77,7 @@ export default function Shell({ user, onLogout, children }) {
         <button ref={menuBtn} className="icon-btn" aria-label="Open navigation menu" aria-expanded={open} aria-controls="sidebar" onClick={() => setOpen(true)}>
           <Icon name="menu" />
         </button>
-        <div className="brand brand-sm"><span className="brand-mark"><Icon name="logo" size={18} /></span><span>Academic Assistant</span></div>
+        <div className="brand brand-sm"><span className="brand-mark"><Logo size={18} /></span><span>Academic Assistant</span></div>
         <div className="topbar-actions">
           <BellButton unread={notif.unread} onClick={() => notif.setOpen(true)} />
           <button className="icon-btn" aria-label={themeLabel} onClick={toggleTheme}>
@@ -90,7 +91,7 @@ export default function Shell({ user, onLogout, children }) {
       <aside id="sidebar" className={`sidebar ${open ? "is-open" : ""}`} aria-label="Main navigation">
         <div className="sidebar-top">
           <div className="brand">
-            <span className="brand-mark"><Icon name="logo" size={20} /></span>
+            <span className="brand-mark"><Logo size={20} /></span>
             <span className="brand-text">College Academic<br />Assistant</span>
           </div>
           <button ref={closeBtn} className="icon-btn only-mobile" aria-label="Close navigation menu" onClick={() => setOpen(false)}>
