@@ -174,6 +174,7 @@ export default function Auth({ onDone }) {
 
           {infoBox}{errBox}
           <Button loading={busy}>{register ? "Send verification code" : "Log in"}</Button>
+          {!register && <div className="auth-switch"><Link to="/forgot-password" className="link-btn">Forgot password?</Link></div>}
           <div className="auth-switch">
             <button type="button" className="link-btn" onClick={() => switchMode(register ? "login" : "register")}>
               {register ? "Already have an account? Log in" : "New student? Create an account"}
