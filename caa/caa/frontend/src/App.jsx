@@ -14,6 +14,7 @@ import Seats from "./pages/Seats.jsx";
 import ManageExams from "./pages/ManageExams.jsx";
 import Profile from "./pages/Profile.jsx";
 import Attendance from "./pages/Attendance.jsx";
+import ForgotPassword from "./pages/ForgotPassword.jsx";
 import FacultyAuth from "./faculty/FacultyAuth.jsx";
 import FacultyApp from "./faculty/FacultyApp.jsx";
 
@@ -34,6 +35,8 @@ export default function App() {
   if (!user) return (
     <Routes>
       <Route path="/login" element={<Auth onDone={() => { load().then(() => nav("/")); }} />} />
+      <Route path="/forgot-password" element={<ForgotPassword portal="student" />} />
+      <Route path="/faculty/forgot-password" element={<ForgotPassword portal="faculty" />} />
       <Route path="/faculty/login" element={<FacultyAuth onDone={() => { load().then(() => nav("/faculty")); }} />} />
       <Route path="/faculty/*" element={<Navigate to="/faculty/login" />} />
       <Route path="*" element={<Navigate to="/login" />} />

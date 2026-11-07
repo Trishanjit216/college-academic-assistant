@@ -571,3 +571,17 @@ a.fac-switch-btn:hover { background: var(--border); }
 .fac-code-input { font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
 .fac-note { margin-top: var(--s4); font-size: .82rem; text-align: center; }
 @media (max-width: 860px) { .fac-auth { grid-template-columns: 1fr; } .fac-auth-side { display: none; } }
+
+/* ============ Forgot password ============ */
+.fp-wrap { min-height: 100vh; display: grid; place-content: center; justify-items: center; gap: var(--s5); padding: var(--s6) var(--s4); background: var(--bg); }
+.fp-brand { display: flex; align-items: center; gap: var(--s3); font-weight: 700; color: var(--text); }
+.fp-card { width: min(440px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s6); box-shadow: var(--shadow-sm, 0 1px 3px rgba(0,0,0,.08)); }
+.fp-card .muted { display: block; margin-bottom: var(--s3); }
+@media (max-width: 480px) { .fp-card { padding: var(--s5) var(--s4); } }
+.fp-steps { list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); margin: 0 0 var(--s5); padding: 0; font-size: .75rem; color: var(--muted); }
+.fp-steps li { display: grid; justify-items: center; gap: 4px; text-align: center; }
+.fp-steps li span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border); font-weight: 700; }
+.fp-steps li.is-now { color: var(--text); font-weight: 600; } .fp-steps li.is-now span { border-color: var(--primary); color: var(--primary); }
+.fp-steps li.is-done span { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.fp-done { display: grid; justify-items: center; gap: var(--s3); text-align: center; padding: var(--s4) 0; }
+.fp-tick { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: #dcfce7; color: #15803d; }
