@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, tokens } from "../api.js";
 import Icon from "../icons.jsx";
 import { Button, Field } from "./ui.jsx";
@@ -146,6 +147,10 @@ export default function Auth({ onDone }) {
       <main className="auth-form">
         <form className="auth-card" onSubmit={submit}>
           {mobileBrand}
+          <div className="fac-switch" role="group" aria-label="Choose login type">
+            <span className="fac-switch-btn is-active" aria-current="page">Student Login</span>
+            <Link to="/faculty/login" className="fac-switch-btn">Faculty Login</Link>
+          </div>
           <h2>{register ? "Create your student account" : "Log in"}</h2>
           <span className="muted">{register ? "We'll email you a code to confirm your address." : "Welcome back. Enter your details to continue."}</span>
 
