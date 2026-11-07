@@ -31,6 +31,7 @@ from .models import (AllotmentRow, AttendanceRecord, Exam, ExamDocument, ExamMan
                      FormGuide, Group, Lab, Notification, Post, PushDevice, PushPreference, Report, Subject,
                      SyllabusEntry)
 from . import allotment, attendance_calc, otp, pdf_extract
+from . import session_stamp as auth_stamp
 from . import push as fcm
 from .emailer import EmailDeliveryError, send_via_brevo
 from .permissions import AdminWritesOnly, IsModerator, ReadAllEditorsWrite
@@ -40,6 +41,12 @@ User = get_user_model()
 
 class EmailOrUsernameTokenSerializer(TokenObtainPairSerializer):
     """New accounts log in with their email; older accounts can keep using their username."""
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token[auth_stamp.CLAIM] = auth_stamp.stamp(user)     # ends this session if the password is later changed/reset
+        return token
+
     def validate(self, attrs):
         ident = (attrs.get("username") or "").strip()
         if "@" in ident:

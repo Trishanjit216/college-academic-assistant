@@ -12,18 +12,21 @@ class EmailDeliveryError(Exception):
     pass
 
 
-def send_via_brevo(api_key, sender_email, sender_name, to, code, ttl_minutes=10, url=BREVO_URL, timeout=10):
+def send_via_brevo(api_key, sender_email, sender_name, to, code, ttl_minutes=10, url=BREVO_URL, timeout=10, purpose="signup"):
     if not api_key or not sender_email:
         raise EmailDeliveryError("Email delivery isn't set up on the server yet. Please contact the administrator.")
-    text = (f"Your College Academic Assistant verification code is {code}.\n"
-            f"It expires in {ttl_minutes} minutes. If you didn't try to sign up, you can ignore this email.")
-    html = (f"<p>Your College Academic Assistant verification code is:</p>"
+    reset = purpose == "reset"
+    what = "password reset code" if reset else "verification code"
+    ignore = "If you didn't ask to reset your password, ignore this email. Your password has not changed." if reset else "If you didn't try to sign up, you can ignore this email."
+    text = (f"Your College Academic Assistant {what} is {code}.\n"
+            f"It expires in {ttl_minutes} minutes. {ignore}")
+    html = (f"<p>Your College Academic Assistant {what} is:</p>"
             f"<p style=\"font-size:28px;font-weight:700;letter-spacing:6px\">{code}</p>"
-            f"<p>It expires in {ttl_minutes} minutes. If you didn't try to sign up, you can ignore this email.</p>")
+            f"<p>It expires in {ttl_minutes} minutes. {ignore}</p>")
     body = json.dumps({
         "sender": {"name": sender_name or "College Academic Assistant", "email": sender_email},
         "to": [{"email": to}],
-        "subject": "Your verification code",
+        "subject": "Your password reset code" if reset else "Your verification code",
         "textContent": text,
         "htmlContent": html,
     }).encode()

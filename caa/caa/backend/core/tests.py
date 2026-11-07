@@ -1075,3 +1075,205 @@ class FacultyTests(APITestCase):
         self.assertEqual(self.client.post("/api/auth/refresh/", {"refresh": t["refresh"]}, format="json").status_code in (200, 401), True)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {t['access']}")
         self.assertEqual(self.client.get("/api/faculty/me/").status_code, 401)
+
+
+@override_settings(CACHES=LOCMEM, BREVO_API_KEY="test-key", EMAIL_FROM="noreply@college.test")
+class PasswordResetTests(APITestCase):
+    """Forgot password (email OTP) for students and faculty, kept strictly separate."""
+    NEW = "Violet-Harbor-52-Tide"
+
+    def setUp(self):
+        caches["default"].clear(); caches["otp"].clear()
+        self.sent = []
+        p = mock.patch("core.views_reset.send_via_brevo", side_effect=lambda *a, **k: self.sent.append((a[3], a[4])))
+        p.start(); self.addCleanup(p.stop)
+        self.stu = User.objects.create_user("stu@x.test", email="stu@x.test", password="Old-pass-111-x", role="student")
+        self.fac = User.objects.create_user("fac", email="fac@x.test", password="Old-pass-111-x", role="faculty")
+        FacultyProfile.objects.create(user=self.fac)
+        FacultyAccessCode.objects.create(user=self.fac, code_hash="", status=FacultyAccessCode.ACTIVATED)
+        self.adm = User.objects.create_user("adm", email="adm@x.test", password="Old-pass-111-x", role="admin")
+        self.root = User.objects.create_superuser("root", "root@x.test", "Old-pass-111-x")
+
+    def post(self, step, **d):
+        return self.client.post(f"/api/auth/password-reset/{step}/", d, format="json")
+
+    def ask(self, portal, email): return self.post("request", portal=portal, email=email)
+
+    def code(self): return self.sent[-1][1]
+
+    def full_reset(self, portal, email, pw=None):
+        self.assertEqual(self.ask(portal, email).status_code, 202)
+        r = self.post("verify", portal=portal, email=email, otp=self.code()); self.assertEqual(r.status_code, 200)
+        pw = pw or self.NEW
+        return self.post("confirm", portal=portal, email=email, reset_token=r.data["reset_token"], password=pw, password2=pw)
+
+    def login(self, path, ident, pw): return self.client.post(path, {"username": ident, "password": pw}, format="json")
+
+    # --- happy paths
+    def test_student_can_reset_and_old_password_stops_working(self):
+        r = self.full_reset("student", "stu@x.test")
+        self.assertEqual((r.status_code, r.data["code"]), (200, "reset_done"))
+        self.assertEqual(self.login("/api/auth/token/", "stu@x.test", "Old-pass-111-x").status_code, 401)
+        self.assertEqual(self.login("/api/auth/token/", "stu@x.test", self.NEW).status_code, 200)
+        self.stu.refresh_from_db(); self.assertTrue(self.stu.password.startswith("pbkdf2_"))      # existing hasher, never plain
+
+    def test_faculty_can_reset_and_log_in_on_faculty_page(self):
+        r = self.full_reset("faculty", "fac@x.test")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.login("/api/auth/faculty/token/", "fac", "Old-pass-111-x").status_code, 401)
+        self.assertEqual(self.login("/api/auth/faculty/token/", "fac@x.test", self.NEW).status_code, 200)
+
+    def test_the_code_is_emailed_to_the_account_and_not_stored_in_plain_text(self):
+        self.ask("student", "STU@x.test")                                                   # case-insensitive
+        self.assertEqual(self.sent[0][0], "stu@x.test")
+        self.assertNotIn(self.code(), str(caches["otp"]._cache))
+
+    # --- no account enumeration
+    def test_unknown_and_other_roles_get_the_same_reply_and_no_email(self):
+        base = self.ask("student", "stu@x.test"); caches["otp"].clear(); self.sent.clear()
+        for portal, email in (("student", "nobody@x.test"), ("student", "fac@x.test"), ("faculty", "stu@x.test"),
+                              ("student", "adm@x.test"), ("faculty", "adm@x.test"), ("student", "root@x.test")):
+            r = self.ask(portal, email)
+            self.assertEqual(r.status_code, 202, (portal, email)); self.assertEqual(set(r.data), set(base.data))
+            self.assertEqual(r.data["detail"], base.data["detail"])
+        self.assertEqual(self.sent, [])
+
+    def test_unknown_account_wrong_code_message_matches_real_account(self):
+        self.ask("student", "nobody@x.test"); self.ask("student", "stu@x.test")
+        a = self.post("verify", portal="student", email="nobody@x.test", otp="000000")
+        b = self.post("verify", portal="student", email="stu@x.test", otp="000000" if self.code() != "000000" else "111111")
+        self.assertEqual((a.status_code, a.data["detail"]), (b.status_code, b.data["detail"]))
+
+    # --- separation and protection
+    def test_student_cannot_reset_faculty_or_admin_and_vice_versa(self):
+        for portal, email in (("student", "fac@x.test"), ("faculty", "stu@x.test"), ("student", "adm@x.test"), ("faculty", "adm@x.test"), ("student", "root@x.test")):
+            self.ask(portal, email)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.post("verify", portal="student", email="fac@x.test", otp="123456").status_code, 400)
+        for u in (self.fac, self.adm, self.root, self.stu):
+            self.assertTrue(User.objects.get(pk=u.pk).check_password("Old-pass-111-x"))
+
+    def test_student_token_cannot_be_used_to_reset_a_faculty_account(self):
+        self.ask("student", "stu@x.test"); tok = self.post("verify", portal="student", email="stu@x.test", otp=self.code()).data["reset_token"]
+        for portal, email in (("faculty", "stu@x.test"), ("student", "fac@x.test"), ("faculty", "fac@x.test")):
+            r = self.post("confirm", portal=portal, email=email, reset_token=tok, password=self.NEW, password2=self.NEW)
+            self.assertEqual(r.status_code, 400, (portal, email))
+        self.assertTrue(User.objects.get(pk=self.fac.pk).check_password("Old-pass-111-x"))
+
+    def test_faculty_without_active_access_cannot_use_recovery(self):
+        rec = self.fac.access_code; rec.status = FacultyAccessCode.REVOKED; rec.save()
+        self.fac.is_active = False; self.fac.save()
+        self.ask("faculty", "fac@x.test"); self.assertEqual(self.sent, [])
+        self.fac.is_active = True; self.fac.save(); rec.status = FacultyAccessCode.PENDING; rec.save()    # not activated yet
+        self.ask("faculty", "fac@x.test"); self.assertEqual(self.sent, [])
+
+    def test_admin_cannot_become_resettable_by_role_confusion(self):
+        self.client.force_authenticate(self.stu)
+        self.client.patch("/api/auth/me/", {"role": "admin"}, format="json")                 # no effect
+        self.client.force_authenticate(None)
+        self.ask("student", "adm@x.test"); self.assertEqual(self.sent, [])
+
+    # --- OTP rules
+    def test_incorrect_otp_rejected(self):
+        self.ask("student", "stu@x.test"); bad = "000000" if self.code() != "000000" else "111111"
+        r = self.post("verify", portal="student", email="stu@x.test", otp=bad)
+        self.assertEqual((r.status_code, r.data["code"]), (400, "invalid")); self.assertNotIn("reset_token", r.data)
+
+    def test_expired_otp_rejected(self):
+        self.ask("student", "stu@x.test")
+        with mock.patch("core.views_reset.time.time", return_value=__import__("time").time() + 301):
+            r = self.post("verify", portal="student", email="stu@x.test", otp=self.code())
+        self.assertEqual((r.status_code, r.data["code"]), (400, "expired"))
+
+    def test_resend_needs_the_60_second_cooldown_and_invalidates_the_old_code(self):
+        self.ask("student", "stu@x.test"); first = self.code()
+        r = self.ask("student", "stu@x.test"); self.assertEqual((r.status_code, r.data["code"]), (429, "cooldown")); self.assertEqual(len(self.sent), 1)
+        with mock.patch("core.views_reset.time.time", return_value=__import__("time").time() + 61):
+            self.assertEqual(self.ask("student", "stu@x.test").status_code, 202)
+            second = self.code(); self.assertEqual(len(self.sent), 2)
+            if first != second:
+                self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=first).status_code, 400)
+            self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=second).status_code, 200)
+
+    def test_too_many_wrong_attempts_block_even_the_right_code(self):
+        self.ask("student", "stu@x.test"); good = self.code(); bad = "000000" if good != "000000" else "111111"
+        for _ in range(4): self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=bad).status_code, 400)
+        r = self.post("verify", portal="student", email="stu@x.test", otp=bad); self.assertEqual((r.status_code, r.data["code"]), (429, "too_many_attempts"))
+        self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=good).status_code, 400)
+
+    def test_code_works_only_once(self):
+        self.ask("student", "stu@x.test"); c = self.code()
+        self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=c).status_code, 200)
+        self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=c).status_code, 400)
+
+    # --- password rules
+    def test_confirmation_mismatch_and_weak_password_do_not_change_anything_or_burn_the_token(self):
+        self.ask("student", "stu@x.test"); tok = self.post("verify", portal="student", email="stu@x.test", otp=self.code()).data["reset_token"]
+        ok = dict(portal="student", email="stu@x.test", reset_token=tok)
+        self.assertEqual(self.post("confirm", **ok, password=self.NEW, password2=self.NEW + "x").data["code"], "mismatch")
+        self.assertEqual(self.post("confirm", **ok, password="12345678", password2="12345678").data["code"], "weak_password")
+        self.assertEqual(self.post("confirm", **ok, password="short", password2="short").status_code, 400)
+        self.assertTrue(User.objects.get(pk=self.stu.pk).check_password("Old-pass-111-x"))
+        self.assertEqual(self.post("confirm", **ok, password=self.NEW, password2=self.NEW).status_code, 200)
+        self.assertEqual(self.post("confirm", **ok, password="Another-Pass-77-Z", password2="Another-Pass-77-Z").status_code, 400)   # token is single use
+
+    def test_confirm_without_verifying_is_refused(self):
+        r = self.post("confirm", portal="student", email="stu@x.test", reset_token="x" * 43, password=self.NEW, password2=self.NEW)
+        self.assertEqual((r.status_code, r.data["code"]), (400, "invalid_token"))
+
+    # --- sessions
+    def test_reset_ends_existing_sessions(self):
+        t = self.login("/api/auth/token/", "stu@x.test", "Old-pass-111-x").data
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {t['access']}")
+        self.assertEqual(self.client.get("/api/auth/me/").status_code, 200)
+        self.client.credentials(); self.full_reset("student", "stu@x.test")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {t['access']}")
+        self.assertEqual(self.client.get("/api/auth/me/").status_code, 401)
+        self.client.credentials()
+        fresh = self.client.post("/api/auth/refresh/", {"refresh": t["refresh"]}, format="json")       # old refresh token yields an unusable access token
+        if fresh.status_code == 200:
+            self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {fresh.data['access']}")
+            self.assertEqual(self.client.get("/api/auth/me/").status_code, 401)
+        self.client.credentials()
+        n = self.login("/api/auth/token/", "stu@x.test", self.NEW).data
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {n['access']}")
+        self.assertEqual(self.client.get("/api/auth/me/").status_code, 200)
+
+    def test_existing_logins_still_work_and_refresh_keeps_working(self):
+        t = self.login("/api/auth/token/", "stu@x.test", "Old-pass-111-x").data
+        r = self.client.post("/api/auth/refresh/", {"refresh": t["refresh"]}, format="json"); self.assertEqual(r.status_code, 200)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {r.data['access']}"); self.assertEqual(self.client.get("/api/auth/me/").status_code, 200)
+        self.client.credentials()
+        self.assertEqual(self.login("/api/auth/faculty/token/", "fac", "Old-pass-111-x").status_code, 200)
+        self.assertEqual(self.login("/api/auth/faculty/token/", "stu@x.test", "Old-pass-111-x").status_code, 401)
+
+    def test_faculty_activation_session_is_valid(self):
+        f2 = User.objects.create_user("f2", email="f2@x.test", password="x", role="faculty"); FacultyProfile.objects.create(user=f2)
+        code = faculty_codes.issue_code(f2, self.adm)
+        r = self.client.post("/api/auth/faculty/activate/", {"identifier": "f2", "code": code, "password": self.NEW, "password2": self.NEW}, format="json")
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {r.data['access']}")
+        self.assertEqual(self.client.get("/api/faculty/me/").status_code, 200)
+
+    # --- delivery and input
+    def test_delivery_failure_is_reported_and_starts_no_cooldown(self):
+        from .emailer import EmailDeliveryError
+        with mock.patch("core.views_reset.send_via_brevo", side_effect=EmailDeliveryError("We couldn't reach the email service.")):
+            r = self.ask("student", "stu@x.test")
+        self.assertEqual((r.status_code, r.data["code"]), (503, "email_unavailable"))
+        self.assertEqual(self.ask("student", "stu@x.test").status_code, 202)
+
+    @override_settings(BREVO_API_KEY="")
+    def test_email_not_configured_is_reported_to_everyone_alike(self):
+        for email in ("stu@x.test", "nobody@x.test"):
+            self.assertEqual(self.ask("student", email).status_code, 503)
+
+    def test_bad_input(self):
+        self.assertEqual(self.ask("admin", "stu@x.test").status_code, 400)
+        self.assertEqual(self.ask("student", "").status_code, 400)
+        self.assertEqual(self.ask("student", "9876543210").status_code, 400)                # mobile numbers aren't supported
+        self.assertEqual(self.post("request", portal="student").status_code, 400)
+        self.assertEqual(self.post("verify", portal="student", email="stu@x.test", otp=123456).status_code, 400)
+
+    def test_works_without_login_even_with_a_stale_token(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer not-a-real-token")
+        self.assertEqual(self.ask("student", "stu@x.test").status_code, 202)

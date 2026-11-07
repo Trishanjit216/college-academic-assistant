@@ -16,7 +16,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from . import faculty_codes, notify, sections as sec
+from . import session_stamp as auth_stamp, faculty_codes, notify, sections as sec
 from .models import Event, FacultyActivity, FacultyProfile, Group, SyllabusEntry
 from .views import EmailOrUsernameTokenSerializer
 
@@ -56,6 +56,7 @@ class FacultyActivateView(APIView):
             return Response({"detail": e.message, "code": e.code}, status=400)
         log(user, "Activated account")
         refresh = RefreshToken.for_user(user)
+        refresh[auth_stamp.CLAIM] = auth_stamp.stamp(user)
         return Response({"access": str(refresh.access_token), "refresh": str(refresh)})
 
 

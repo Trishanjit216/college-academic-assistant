@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from . import views as v
-from . import views_faculty as vf
+from . import views_faculty as vf, views_reset as vr
 
 router = DefaultRouter()
 router.register("subjects", v.SubjectViewSet)
@@ -30,6 +30,9 @@ urlpatterns = [
     path("push/preferences/", v.PushPreferencesView.as_view()),
     path("push/test/", v.PushTestView.as_view()),
     path("auth/token/", v.ThrottledTokenView.as_view()),
+    path("auth/password-reset/request/", vr.ResetRequestView.as_view()),
+    path("auth/password-reset/verify/", vr.ResetVerifyView.as_view()),
+    path("auth/password-reset/confirm/", vr.ResetConfirmView.as_view()),
     path("auth/faculty/token/", vf.FacultyLoginView.as_view()),
     path("auth/faculty/activate/", vf.FacultyActivateView.as_view()),
     path("faculty/me/", vf.FacultyMeView.as_view()),
