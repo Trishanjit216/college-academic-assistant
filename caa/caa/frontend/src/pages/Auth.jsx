@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, tokens } from "../api.js";
+import Logo from "../Logo.jsx";
 import Icon from "../icons.jsx";
 import { Button, Field } from "./ui.jsx";
 import GroupSection from "./GroupSection.jsx";
@@ -98,7 +99,7 @@ export default function Auth({ onDone }) {
 
   const brand = (
     <section className="auth-brand" aria-label="About College Academic Assistant">
-      <div className="brand"><span className="brand-mark"><Icon name="logo" size={20} /></span><span className="brand-text">College Academic<br />Assistant</span></div>
+      <div className="brand"><span className="brand-mark"><Logo size={20} /></span><span className="brand-text">College Academic<br />Assistant</span></div>
       <h1>Everything you need for college, in one place.</h1>
       <p>Check what was taught, what's due and what's coming up, without scrolling through chat groups.</p>
       <ul className="auth-points">
@@ -109,7 +110,7 @@ export default function Auth({ onDone }) {
       </ul>
     </section>
   );
-  const mobileBrand = <div className="brand auth-mobile-brand"><span className="brand-mark"><Icon name="logo" size={20} /></span><span className="brand-text">College Academic Assistant</span></div>;
+  const mobileBrand = <div className="brand auth-mobile-brand"><span className="brand-mark"><Logo size={20} /></span><span className="brand-text">College Academic Assistant</span></div>;
   const errBox = err && <div className="form-error" role="alert"><Icon name="alert" size={18} /><span>{err}</span></div>;
   const infoBox = info && <div className="form-info" role="status"><span>{info}</span></div>;
 
