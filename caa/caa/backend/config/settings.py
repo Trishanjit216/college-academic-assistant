@@ -93,12 +93,12 @@ EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "College Academic Assistant"
 
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework_simplejwt.authentication.JWTAuthentication"],
+    "DEFAULT_AUTHENTICATION_CLASSES": ["core.auth.StampedJWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
-    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "posts": "30/hour", "push": "30/hour", "activate": "20/hour"},
+    "DEFAULT_THROTTLE_RATES": {"auth": "40/hour", "otp": "60/hour", "seats": "120/hour", "posts": "30/hour", "push": "30/hour", "activate": "20/hour", "pwreset": "30/hour"},
 }
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
