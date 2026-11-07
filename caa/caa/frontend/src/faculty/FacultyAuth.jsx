@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, tokens } from "../api.js";
+import Logo from "../Logo.jsx";
 import Icon from "../icons.jsx";
 import { Button, Field } from "../pages/ui.jsx";
 
@@ -34,7 +35,7 @@ export default function FacultyAuth({ onDone }) {
   return (
     <div className="fac-auth">
       <section className="fac-auth-side" aria-label="Faculty portal">
-        <div className="brand"><span className="brand-mark"><Icon name="logo" size={20} /></span><span className="brand-text">College Academic<br />Assistant</span></div>
+        <div className="brand"><span className="brand-mark"><Logo size={20} /></span><span className="brand-text">College Academic<br />Assistant</span></div>
         <h1>Faculty portal</h1>
         <p>Publish events and syllabus updates for your students. Students are notified automatically.</p>
         <ul className="fac-points">

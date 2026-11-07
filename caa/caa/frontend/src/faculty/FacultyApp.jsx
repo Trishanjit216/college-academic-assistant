@@ -1,3 +1,4 @@
+import Logo from "../Logo.jsx";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { api } from "../api.js";
@@ -16,7 +17,7 @@ export default function FacultyApp({ user, onLogout }) {
   useEffect(load, []);
 
   if (err) return <div className="fac-boot"><ErrorState message={err} onRetry={load} /><button className="link-btn" onClick={onLogout}>Log out</button></div>;
-  if (!me) return <div className="boot" role="status">Loading…</div>;
+  if (!me) return <div className="boot" role="status"><div className="boot-logo"><span className="brand-mark"><Logo size={72} /></span><span>Loading…</span></div></div>;
   return (
     <FacultyShell user={user} me={me} onLogout={onLogout} notif={notif}>
       <Routes>

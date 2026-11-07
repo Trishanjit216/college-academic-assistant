@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import Logo from "../Logo.jsx";
 import Icon from "../icons.jsx";
 import { useTheme } from "../theme.js";
 import { BellButton, NotificationDrawer, useNotifications } from "../notifications.jsx";
@@ -42,7 +43,7 @@ export default function FacultyShell({ user, me, onLogout, notif, children }) {
       <a className="skip-link" href="#fac-main">Skip to main content</a>
       <header className="fac-topbar">
         <button ref={menuBtn} className="icon-btn" aria-label="Open faculty menu" aria-expanded={open} aria-controls="fac-side" onClick={() => setOpen(true)}><Icon name="menu" /></button>
-        <div className="fac-top-title"><Icon name="logo" size={18} /><span>Faculty portal</span></div>
+        <div className="fac-top-title"><span className="fac-top-mark"><Logo size={22} /></span><span>Faculty portal</span></div>
         <div className="fac-top-actions">
           <BellButton unread={notif.unread} onClick={() => notif.setOpen(true)} />
           <button className="icon-btn" aria-label={themeLabel} onClick={toggleTheme}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>
@@ -52,7 +53,7 @@ export default function FacultyShell({ user, me, onLogout, notif, children }) {
 
       <aside id="fac-side" className={`fac-side ${open ? "is-open" : ""}`} aria-label="Faculty navigation">
         <div className="fac-side-top">
-          <div className="fac-brand"><span className="fac-brand-mark"><Icon name="logo" size={20} /></span><span><strong>Faculty portal</strong><small>College Academic Assistant</small></span></div>
+          <div className="fac-brand"><span className="fac-brand-mark"><Logo size={20} /></span><span><strong>Faculty portal</strong><small>College Academic Assistant</small></span></div>
           <button ref={closeBtn} className="icon-btn only-mobile fac-close" aria-label="Close faculty menu" onClick={() => setOpen(false)}><Icon name="close" /></button>
         </div>
         <nav className="fac-nav">
