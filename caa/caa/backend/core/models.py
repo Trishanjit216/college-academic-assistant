@@ -152,6 +152,59 @@ class Notification(models.Model):
                                                name="core_notif_user_dedupe_uniq")]
 
 
+class FacultyProfile(models.Model):
+    """What one faculty member is allowed to manage. Created and controlled by the admin only.
+    Nothing is allowed by default: the admin ticks the permissions and assigns subjects."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="faculty_profile")
+    designation = models.CharField(max_length=80, blank=True)
+    department = models.CharField(max_length=100, blank=True)
+    can_manage_events = models.BooleanField(default=False, help_text="May create, edit, publish and delete THEIR OWN events.")
+    can_manage_syllabus = models.BooleanField(default=False, help_text="May edit and publish the syllabus of their assigned subjects.")
+    subjects = models.ManyToManyField(Subject, blank=True, related_name="faculty_profiles", help_text="Subjects whose syllabus this person may manage.")
+    groups = models.ManyToManyField(Group, blank=True, related_name="faculty_profiles",
+                                    help_text="Optional. If set, their events may only target these groups (or sections inside them).")
+    sections = models.CharField(max_length=120, blank=True, default="", help_text="Optional extra sections, e.g. A1, A2. Events may only target these sections.")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.user.get_full_name() or self.user.get_username()
+
+    def clean(self):
+        super().clean()
+        from django.core.exceptions import ValidationError
+        from . import notify
+        if self.user_id and self.user.role != User.FACULTY:
+            raise ValidationError({"user": "Only accounts with the Faculty role can have a faculty profile."})
+        try:
+            self.sections = ", ".join(notify.parse_sections(self.sections))
+        except ValueError as e:
+            raise ValidationError({"sections": str(e)})
+
+
+class FacultyAccessCode(models.Model):
+    """The state of one faculty member's activation code. The code itself is never stored: only its salted hash."""
+    PENDING, ACTIVATED, REVOKED, LOCKED = "pending", "activated", "revoked", "locked"
+    STATUS = [(PENDING, "Waiting to be used"), (ACTIVATED, "Used (account active)"), (REVOKED, "Revoked"), (LOCKED, "Locked (too many wrong tries)")]
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="access_code")
+    code_hash = models.CharField(max_length=200, blank=True, default="")
+    status = models.CharField(max_length=10, choices=STATUS, default=PENDING)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    issued_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    issued_at = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+
+class FacultyActivity(models.Model):
+    """Short log of what a faculty member did, shown on their own dashboard."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="faculty_activity")
+    text = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+
 class PushDevice(models.Model):
     """One browser/phone that agreed to receive push alerts (an FCM registration token). Tokens are secrets: never exposed by the API."""
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="push_devices")
@@ -176,6 +229,7 @@ class Event(models.Model):
     description = models.TextField(blank=True)
     registration_info = models.TextField(blank=True)
     eligibility = models.CharField(max_length=200, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+", editable=False)
     is_published = models.BooleanField(default=True, help_text="Untick to keep this event as a draft: hidden from students, and nobody is notified. "
                                                                  "Students are notified when it is published.")
     target_group = models.ForeignKey(Group, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",

@@ -33,7 +33,7 @@ from .models import (AllotmentRow, AttendanceRecord, Exam, ExamDocument, ExamMan
 from . import allotment, attendance_calc, otp, pdf_extract
 from . import push as fcm
 from .emailer import EmailDeliveryError, send_via_brevo
-from .permissions import IsModerator, ReadAllEditorsWrite
+from .permissions import AdminWritesOnly, IsModerator, ReadAllEditorsWrite
 
 User = get_user_model()
 
@@ -209,6 +209,7 @@ class BaseViewSet(viewsets.ModelViewSet):
 
 
 class SubjectViewSet(BaseViewSet):
+    permission_classes = [AdminWritesOnly]
     queryset = Subject.objects.all()
     serializer_class = s.SubjectSerializer
     search_fields = ["name", "code"]
@@ -282,13 +283,16 @@ class AssignmentViewSet(BaseViewSet):
 
 
 class EventViewSet(BaseViewSet):
+    permission_classes = [AdminWritesOnly]
     queryset = Event.objects.all()
     serializer_class = s.EventSerializer
     search_fields = ["name", "description", "venue", "organizer"]
 
     def get_queryset(self):
-        qs = Event.objects.all()
-        return qs if self.request.user.is_editor else qs.filter(is_published=True)   # drafts are for editors only
+        qs, u = Event.objects.all(), self.request.user
+        if u.is_superuser or u.role == User.ADMIN:
+            return qs                                                                  # admins see every draft
+        return qs.filter(Q(is_published=True) | Q(created_by=u))                       # others: published, plus their own drafts
 
 
 class FormGuideViewSet(BaseViewSet):
@@ -435,7 +439,8 @@ class CronReminderView(APIView):
 
 
 class SyllabusViewSet(BaseViewSet):
-    """Read for everyone logged in; create/edit for faculty/admin (or via the Django admin)."""
+    """Read for everyone logged in; create/edit for admins here. Faculty edit through /api/faculty/syllabus/."""
+    permission_classes = [AdminWritesOnly]
     queryset = SyllabusEntry.objects.select_related("subject")
     serializer_class = s.SyllabusEntrySerializer
     search_fields = ["subject__name", "subject__code", "content"]

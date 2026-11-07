@@ -14,3 +14,13 @@ class IsModerator(BasePermission):
     def has_permission(self, request, view):
         u = request.user
         return bool(u and u.is_authenticated and u.is_moderator)
+
+
+class AdminWritesOnly(BasePermission):
+    """Any logged-in user can read. Only an admin may change this data through this endpoint
+    (faculty manage their own events and subjects' syllabus through /api/faculty/ instead)."""
+    def has_permission(self, request, view):
+        u = request.user
+        if not (u and u.is_authenticated):
+            return False
+        return request.method in SAFE_METHODS or bool(u.is_superuser or u.role == "admin")

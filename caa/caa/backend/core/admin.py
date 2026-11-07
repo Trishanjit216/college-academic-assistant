@@ -1,8 +1,12 @@
-from django.contrib import admin
+from django import forms
+from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin
+from django.utils import timezone
+
+from . import faculty_codes
 
 from .models import (AllotmentRow, Exam, ExamManager, Assignment, AssignmentProgress, ClassRecord, Comment, Event, Experiment,
-                     FormGuide, Group, Lab, Notification, Post, PushDevice, ReminderLog, Report, Subject, SyllabusEntry, User)
+                     FacultyProfile, FormGuide, Group, Lab, Notification, Post, PushDevice, ReminderLog, Report, Subject, SyllabusEntry, User)
 
 
 @admin.register(User)
@@ -143,3 +147,126 @@ class PushDeviceAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+# =====================================================================
+#  Faculty accounts: create, assign permissions, issue / regenerate / revoke individual access codes
+# =====================================================================
+def _is_admin(request):
+    u = request.user
+    return bool(u.is_authenticated and u.is_active and (u.is_superuser or u.role == User.ADMIN))
+
+
+class FacultyAddForm(forms.ModelForm):
+    """Create a brand-new faculty account here, or attach a profile to an existing faculty account."""
+    username = forms.CharField(max_length=150, required=False, help_text="New account: the login name.")
+    first_name = forms.CharField(max_length=100, required=False)
+    last_name = forms.CharField(max_length=100, required=False)
+    email = forms.EmailField(required=False, help_text="New account: the faculty member's email (also works as a login name).")
+    existing_user = forms.ModelChoiceField(queryset=User.objects.filter(role=User.FACULTY, faculty_profile__isnull=True), required=False,
+                                           label="OR choose an existing faculty account",
+                                           help_text="Their current password stops working until they activate with the new code.")
+
+    class Meta:
+        model = FacultyProfile
+        exclude = ("user",)
+
+    def clean(self):
+        data = super().clean()
+        if data.get("existing_user"):
+            return data
+        for f in ("username", "first_name", "email"):
+            if not data.get(f):
+                self.add_error(f, "Required for a new account (or choose an existing faculty account).")
+        un, em = data.get("username"), (data.get("email") or "").strip()
+        if un and User.objects.filter(username__iexact=un).exists():
+            self.add_error("username", "That login name is already taken.")
+        if em and User.objects.filter(email__iexact=em).exists():
+            self.add_error("email", "That email is already used by another account.")
+        return data
+
+
+@admin.register(FacultyProfile)
+class FacultyProfileAdmin(admin.ModelAdmin):
+    list_display = ("name", "department", "access_status", "can_manage_events", "can_manage_syllabus", "subject_list")
+    list_filter = ("can_manage_events", "can_manage_syllabus", "department")
+    search_fields = ("user__username", "user__first_name", "user__last_name", "user__email")
+    filter_horizontal = ("subjects", "groups")
+    actions = ["generate_new_code", "revoke_access"]
+
+    # only real admins may touch faculty accounts
+    def has_module_permission(self, request): return _is_admin(request)
+    def has_view_permission(self, request, obj=None): return _is_admin(request)
+    def has_add_permission(self, request): return _is_admin(request)
+    def has_change_permission(self, request, obj=None): return _is_admin(request)
+    def has_delete_permission(self, request, obj=None): return _is_admin(request)
+
+    def get_form(self, request, obj=None, **kwargs):
+        if obj is None:
+            kwargs["form"] = FacultyAddForm
+        return super().get_form(request, obj, **kwargs)
+
+    def get_fieldsets(self, request, obj=None):
+        perms = ("Permissions", {"fields": ("can_manage_events", "can_manage_syllabus", "subjects", "groups", "sections")})
+        about = ("Profile", {"fields": ("designation", "department")})
+        if obj is None:
+            return (("New faculty account", {"fields": ("username", "first_name", "last_name", "email", "existing_user"),
+                                              "description": "An activation code is generated when you save. It is shown ONCE at the top of the next page."}),
+                    about, perms)
+        return (("Account", {"fields": ("user", "access_status")}), about, perms)
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("user", "access_status") if obj else ()
+
+    @admin.display(description="Name")
+    def name(self, obj):
+        return obj.user.get_full_name() or obj.user.get_username()
+
+    @admin.display(description="Subjects")
+    def subject_list(self, obj):
+        return ", ".join(s.code for s in obj.subjects.all()) or "—"
+
+    @admin.display(description="Access status")
+    def access_status(self, obj):
+        rec = getattr(obj.user, "access_code", None)
+        if rec is None:
+            return "Active (no code issued yet)" if obj.user.is_active else "Disabled"
+        if rec.status == rec.PENDING:
+            late = " – EXPIRED" if rec.expires_at and rec.expires_at < timezone.now() else ""
+            return f"Waiting for activation (code valid until {timezone.localtime(rec.expires_at):%d %b %Y}){late}" if rec.expires_at else "Waiting for activation"
+        if rec.status == rec.ACTIVATED:
+            return "Active" if obj.user.is_active else "Activated, but account disabled"
+        return dict(rec.STATUS)[rec.status]
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            return super().save_model(request, obj, form, change)
+        user = form.cleaned_data.get("existing_user")
+        if user is None:
+            user = User(username=form.cleaned_data["username"], first_name=form.cleaned_data["first_name"],
+                        last_name=form.cleaned_data.get("last_name", ""), email=form.cleaned_data["email"].strip(), role=User.FACULTY)
+            user.set_unusable_password()
+            user.is_active = False
+            user.save()
+        obj.user = user
+        super().save_model(request, obj, form, change)
+        self._announce(request, user, faculty_codes.issue_code(user, issued_by=request.user))
+
+    @staticmethod
+    def _announce(request, user, code):
+        who = user.get_full_name() or user.get_username()
+        messages.warning(request, f"ACCESS CODE for {who} ({user.get_username()}): {code}   – shown only once, valid {faculty_codes.DEFAULT_TTL_DAYS} days. "
+                                  f"Give it to them privately. They activate it on the Faculty Login page and choose their own password.")
+
+    @admin.action(description="Generate a NEW access code (old code and password stop working)")
+    def generate_new_code(self, request, queryset):
+        for p in queryset.select_related("user"):
+            self._announce(request, p.user, faculty_codes.issue_code(p.user, issued_by=request.user))
+
+    @admin.action(description="REVOKE access (disable login and destroy any code)")
+    def revoke_access(self, request, queryset):
+        n = 0
+        for p in queryset.select_related("user"):
+            faculty_codes.revoke(p.user)
+            n += 1
+        self.message_user(request, f"Access revoked for {n} faculty member(s). To let one back in, generate a new access code.", messages.SUCCESS)

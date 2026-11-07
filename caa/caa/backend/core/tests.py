@@ -8,7 +8,8 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .management.commands.send_reminders import send_due_reminders
-from .models import AllotmentRow, Assignment, AttendanceRecord, Event, Exam, ExamManager, Group, Notification, Post, PushDevice, PushPreference, Subject, SyllabusEntry, User
+from . import faculty_codes
+from .models import AllotmentRow, Assignment, AttendanceRecord, Event, Exam, ExamManager, FacultyAccessCode, FacultyActivity, FacultyProfile, Group, Notification, Post, PushDevice, PushPreference, Subject, SyllabusEntry, User
 
 
 class AuthAndPermissionTests(APITestCase):
@@ -17,7 +18,7 @@ class AuthAndPermissionTests(APITestCase):
         self.faculty = User.objects.create_user("fac", password="pw-12345-x", role="faculty")
         self.subject = Subject.objects.create(code="X1", name="Maths")
 
-    def test_student_cannot_write_official_data_but_faculty_can(self):
+    def test_only_admin_can_write_subjects_students_and_faculty_cannot(self):
         self.client.force_authenticate(self.student)
         self.assertEqual(self.client.post("/api/subjects/", {"code": "Z", "name": "Z"}).status_code, 403)
         self.assertEqual(self.client.get("/api/subjects/").status_code, 200)
@@ -275,7 +276,10 @@ class SyllabusTests(APITestCase):
         self.client.force_authenticate(self.stu)
         self.assertEqual(self.client.get("/api/syllabus/").data[0]["subject_code"], "MA101")
         self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 403)
-        self.client.force_authenticate(self.fac)
+        self.client.force_authenticate(self.fac)              # faculty must use /api/faculty/syllabus/ (scoped to their subjects)
+        self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 403)
+        adm = User.objects.create_user("adm1", password="pw-12345-x", role="admin")
+        self.client.force_authenticate(adm)
         self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.sub.id, "exam": "end"}).status_code, 201)
 
     def test_requires_login(self):
@@ -530,11 +534,13 @@ class NotificationTests(APITestCase):
         self.client.force_authenticate(self.s1)
         names = [x["name"] for x in self.client.get("/api/events/").data["results"]]
         self.assertEqual(names, ["Public"])
-        self.client.force_authenticate(self.fac)
+        self.client.force_authenticate(self.adm)
         self.assertEqual(len(self.client.get("/api/events/").data["results"]), 2)
+        self.client.force_authenticate(self.fac)                 # faculty see published events only (plus their own drafts)
+        self.assertEqual(len(self.client.get("/api/events/").data["results"]), 1)
 
     def test_api_rejects_invalid_sections_and_students_cannot_create(self):
-        self.client.force_authenticate(self.fac)
+        self.client.force_authenticate(self.adm)
         body = {"name": "E", "start": self.when.isoformat(), "target_sections": "Z9"}
         self.assertEqual(self.client.post("/api/events/", body, format="json").status_code, 400)
         body["target_sections"] = "a2"
@@ -546,7 +552,7 @@ class NotificationTests(APITestCase):
 
     # ---- syllabus ----
     def post_syllabus(self, user=None, **kw):
-        self.client.force_authenticate(user or self.fac)
+        self.client.force_authenticate(user or self.adm)
         body = {"subject": self.sub.id, "exam": "mid1", "semester": 1, "content": "Unit 1\n- Limits", "verified": True}
         body.update(kw)
         return self.client.post("/api/syllabus/", body, format="json")
@@ -788,3 +794,284 @@ class PushTests(APITestCase):
         with mock.patch("core.push.get_sender", return_value=None):
             self.client.force_authenticate(self.s1)
             self.assertEqual(self.client.post("/api/push/test/").status_code, 503)
+
+
+STRONG = "Mango-River-47-Sky"
+
+
+@override_settings(CACHES=LOCMEM)
+class FacultyTests(APITestCase):
+    """Separate faculty login, one-time individual codes, scoped faculty API, tightened generic API."""
+
+    def setUp(self):
+        caches["default"].clear()
+        self.ga, self.gb = Group.objects.create(name="Group A"), Group.objects.create(name="Group B")
+        mk = lambda n, **kw: User.objects.create_user(n, password="pw-12345-x", **kw)
+        self.adm = mk("adm", role="admin")
+        self.stu = mk("stu", role="student", group=self.ga, section="A1", roll_no="1")
+        self.stu2 = mk("stu2", role="student", group=self.gb, section="B1", roll_no="2")
+        self.m1, self.m2, self.m3 = (Subject.objects.create(code=c, name=n) for c, n in (("MA101", "Maths"), ("PH101", "Physics"), ("CS101", "C Programming")))
+        self.f1 = self.faculty("f1", subjects=[self.m1], events=True, syllabus=True)
+        self.f2 = self.faculty("f2", subjects=[self.m2], events=True, syllabus=True)
+        self.when = (timezone.now() + timedelta(days=5)).isoformat()
+
+    def faculty(self, name, subjects=(), events=False, syllabus=False, groups=(), sections=""):
+        u = User.objects.create_user(name, email=f"{name}@college.test", password="pw-12345-x", role="faculty", first_name=name.upper())
+        p = FacultyProfile.objects.create(user=u, can_manage_events=events, can_manage_syllabus=syllabus, sections=sections)
+        p.subjects.set(subjects); p.groups.set(groups)
+        return u
+
+    def login(self, path, ident, pw):
+        return self.client.post(path, {"username": ident, "password": pw}, format="json")
+
+    def activate(self, ident, code, pw=STRONG):
+        return self.client.post("/api/auth/faculty/activate/", {"identifier": ident, "code": code, "password": pw, "password2": pw}, format="json")
+
+    # ---- codes ----
+    def test_each_faculty_gets_own_hashed_code_and_account_is_locked_until_used(self):
+        c1, c2 = faculty_codes.issue_code(self.f1, self.adm), faculty_codes.issue_code(self.f2, self.adm)
+        self.assertNotEqual(c1, c2)
+        for u, c in ((self.f1, c1), (self.f2, c2)):
+            rec = FacultyAccessCode.objects.get(user=u)
+            self.assertTrue(rec.code_hash.startswith("pbkdf2_sha256$"))
+            self.assertNotIn(c.replace("-", ""), rec.code_hash)
+            self.assertEqual(rec.status, "pending")
+            u.refresh_from_db(); self.assertFalse(u.is_active); self.assertFalse(u.has_usable_password())
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", "pw-12345-x").status_code, 401)
+
+    def test_activation_sets_own_password_and_code_is_single_use(self):
+        code = faculty_codes.issue_code(self.f1, self.adm)
+        r = self.activate("f1", code)
+        self.assertEqual(r.status_code, 200); self.assertIn("access", r.data)
+        rec = FacultyAccessCode.objects.get(user=self.f1)
+        self.assertEqual((rec.status, rec.code_hash), ("activated", ""))
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", STRONG).status_code, 200)
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1@college.test", STRONG).status_code, 200)
+        self.assertEqual(self.activate("f1", code, "Another-Pass-93-Moon").status_code, 400)     # code already used
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", STRONG).status_code, 200)  # password unchanged
+
+    def test_another_faculty_members_code_does_not_work(self):
+        faculty_codes.issue_code(self.f1, self.adm); c2 = faculty_codes.issue_code(self.f2, self.adm)
+        r = self.activate("f1", c2)
+        self.assertEqual((r.status_code, r.data["code"]), (400, "invalid_code"))
+
+    def test_wrong_codes_lock_after_five_tries_even_for_the_right_code(self):
+        code = faculty_codes.issue_code(self.f1, self.adm)
+        for _ in range(faculty_codes.MAX_ATTEMPTS):
+            self.assertEqual(self.activate("f1", "AAAA-BBBB-CCCC").status_code, 400)
+        self.assertEqual(FacultyAccessCode.objects.get(user=self.f1).status, "locked")
+        self.assertEqual(self.activate("f1", code).status_code, 400)
+        new = faculty_codes.issue_code(self.f1, self.adm)                               # admin can issue a fresh one
+        self.assertEqual(self.activate("f1", new).status_code, 200)
+
+    def test_expired_revoked_and_unknown_codes_are_rejected_with_one_message(self):
+        code = faculty_codes.issue_code(self.f1, self.adm)
+        FacultyAccessCode.objects.filter(user=self.f1).update(expires_at=timezone.now() - timedelta(minutes=1))
+        msgs = {self.activate("f1", code).data["detail"]}
+        code2 = faculty_codes.issue_code(self.f2, self.adm); faculty_codes.revoke(self.f2)
+        msgs.add(self.activate("f2", code2).data["detail"])
+        msgs.add(self.activate("nobody", "AAAA-BBBB-CCCC").data["detail"])
+        msgs.add(self.activate("stu", "AAAA-BBBB-CCCC").data["detail"])                 # students can't use this form at all
+        self.assertEqual(len(msgs), 1)
+
+    def test_weak_password_is_refused_and_does_not_burn_the_code(self):
+        code = faculty_codes.issue_code(self.f1, self.adm)
+        r = self.activate("f1", code, "12345678")
+        self.assertEqual((r.status_code, r.data["code"]), (400, "weak_password"))
+        self.assertEqual(FacultyAccessCode.objects.get(user=self.f1).failed_attempts, 0)
+        self.assertEqual(self.activate("f1", code).status_code, 200)
+
+    def test_password_mismatch(self):
+        code = faculty_codes.issue_code(self.f1, self.adm)
+        r = self.client.post("/api/auth/faculty/activate/", {"identifier": "f1", "code": code, "password": STRONG, "password2": STRONG + "x"}, format="json")
+        self.assertEqual(r.status_code, 400)
+
+    def test_revoke_cuts_off_existing_sessions_and_regenerate_resets_password(self):
+        self.activate("f1", faculty_codes.issue_code(self.f1, self.adm))
+        tok = self.login("/api/auth/faculty/token/", "f1", STRONG).data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tok}")
+        self.assertEqual(self.client.get("/api/faculty/me/").status_code, 200)
+        faculty_codes.revoke(self.f1)
+        self.assertEqual(self.client.get("/api/faculty/me/").status_code, 401)           # token stops working immediately
+        self.client.credentials()
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", STRONG).status_code, 401)
+        new = faculty_codes.issue_code(self.f1, self.adm)                                # regenerate: old password is gone
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", STRONG).status_code, 401)
+        self.assertEqual(self.activate("f1", new, "Fresh-Pass-58-Lake").status_code, 200)
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", "Fresh-Pass-58-Lake").status_code, 200)
+
+    def test_codes_only_for_faculty_accounts(self):
+        with self.assertRaises(ValueError):
+            faculty_codes.issue_code(self.stu, self.adm)
+
+    # ---- separate login ----
+    def test_faculty_login_is_faculty_only_and_student_login_is_unchanged(self):
+        self.activate("f1", faculty_codes.issue_code(self.f1, self.adm))
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", STRONG).status_code, 200)
+        r = self.login("/api/auth/faculty/token/", "stu", "pw-12345-x")                  # a student can't use the faculty door
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(self.login("/api/auth/faculty/token/", "adm", "pw-12345-x").status_code, 401)
+        self.assertEqual(self.login("/api/auth/token/", "stu", "pw-12345-x").status_code, 200)   # student login exactly as before
+        self.assertEqual(self.login("/api/auth/faculty/token/", "f1", "wrong").status_code, 401)
+
+    def test_nobody_can_register_themselves_as_faculty(self):
+        from . import serializers as s
+        ser = s.SignupSerializer(data={"name": "Eve", "email": "eve@x.test", "password": STRONG, "roll_no": "9", "group": self.ga.id, "section": "A2", "role": "faculty"})
+        self.assertTrue(ser.is_valid(), ser.errors)
+        self.assertNotIn("role", ser.validated_data)
+        self.client.force_authenticate(self.stu)
+        self.client.patch("/api/auth/me/", {"role": "faculty", "is_staff": True}, format="json")
+        self.stu.refresh_from_db(); self.assertEqual(self.stu.role, "student"); self.assertFalse(self.stu.is_staff)
+        self.assertFalse(User.objects.filter(role="faculty", username="eve@x.test").exists())
+
+    # ---- role walls ----
+    def test_students_and_anonymous_cannot_reach_faculty_endpoints(self):
+        urls = ["/api/faculty/me/", "/api/faculty/events/", "/api/faculty/syllabus/", "/api/faculty/groups/", "/api/faculty/activity/"]
+        for u in urls:
+            self.assertEqual(self.client.get(u).status_code, 401, u)
+        for who in (self.stu, self.adm):                    # admins use the Django admin, not this API
+            self.client.force_authenticate(who)
+            for u in urls:
+                self.assertEqual(self.client.get(u).status_code, 403, (who.username, u))
+        self.client.force_authenticate(self.stu)
+        self.assertEqual(self.client.post("/api/faculty/events/", {"name": "x", "start": self.when}, format="json").status_code, 403)
+
+    def test_faculty_cannot_write_through_generic_endpoints(self):
+        self.client.force_authenticate(self.f1)
+        ev = {"name": "x", "start": self.when}
+        self.assertEqual(self.client.post("/api/events/", ev, format="json").status_code, 403)
+        self.assertEqual(self.client.post("/api/subjects/", {"code": "Q", "name": "Q"}, format="json").status_code, 403)
+        self.assertEqual(self.client.post("/api/syllabus/", {"subject": self.m1.id, "exam": "mid1"}, format="json").status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/subjects/{self.m1.id}/").status_code, 403)
+        self.assertEqual(self.client.get("/api/events/").status_code, 200)               # reading is still fine
+        self.client.force_authenticate(self.adm)
+        self.assertEqual(self.client.post("/api/events/", ev, format="json").status_code, 201)   # admin keeps full control
+
+    def test_faculty_cannot_open_the_django_admin(self):
+        self.activate("f1", faculty_codes.issue_code(self.f1, self.adm))
+        self.client.login(username="f1", password=STRONG)
+        r = self.client.get("/admin/core/facultyprofile/")
+        self.assertIn(r.status_code, (302, 403)); self.assertNotEqual(r.status_code, 200)
+
+    def test_permission_flags_are_enforced_by_the_server(self):
+        none = self.faculty("none")
+        self.client.force_authenticate(none)
+        self.assertEqual(self.client.get("/api/faculty/me/").status_code, 200)           # can log in and see own profile
+        self.assertEqual(self.client.get("/api/faculty/events/").status_code, 403)
+        self.assertEqual(self.client.get("/api/faculty/syllabus/").status_code, 403)
+        self.assertFalse(self.client.get("/api/faculty/me/").data["can_manage_events"])
+
+    # ---- events ----
+    def mkevent(self, user, **kw):
+        self.client.force_authenticate(user)
+        body = {"name": "Seminar", "start": self.when, "is_published": True, **kw}
+        return self.client.post("/api/faculty/events/", body, format="json")
+
+    def test_faculty_event_publish_notifies_students_and_draft_does_not(self):
+        r = self.mkevent(self.f1)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(Event.objects.get(pk=r.data["id"]).created_by, self.f1)
+        self.assertEqual(Notification.objects.filter(user=self.stu, kind="event").count(), 1)
+        self.assertEqual(Notification.objects.filter(user=self.f1).count(), 0)
+        d = self.mkevent(self.f1, name="Hidden", is_published=False)
+        self.assertEqual(Notification.objects.filter(user=self.stu, kind="event").count(), 1)
+        r2 = self.client.patch(f"/api/faculty/events/{d.data['id']}/", {"is_published": True}, format="json")
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(Notification.objects.filter(user=self.stu, kind="event").count(), 2)
+        self.client.patch(f"/api/faculty/events/{d.data['id']}/", {"venue": "Hall"}, format="json")      # unrelated edit: no new alert
+        self.assertEqual(Notification.objects.filter(user=self.stu, kind="event").count(), 2)
+
+    def test_faculty_can_only_see_and_change_their_own_events(self):
+        mine = self.mkevent(self.f1).data["id"]
+        theirs = self.mkevent(self.f2, name="Other").data["id"]
+        self.client.force_authenticate(self.f1)
+        ids = [e["id"] for e in self.client.get("/api/faculty/events/").data]
+        self.assertEqual(ids, [mine])
+        for method, kw in (("get", {}), ("patch", {"data": {"name": "hack"}}), ("delete", {})):
+            r = getattr(self.client, method)(f"/api/faculty/events/{theirs}/", format="json", **kw)
+            self.assertEqual(r.status_code, 404, method)
+        self.assertEqual(Event.objects.get(pk=theirs).name, "Other")
+        self.assertEqual(self.client.delete(f"/api/faculty/events/{mine}/").status_code, 204)
+
+    def test_faculty_draft_hidden_from_other_faculty_and_students_in_generic_api(self):
+        d = self.mkevent(self.f1, name="Secret", is_published=False).data["id"]
+        for who, expect in ((self.f1, 1), (self.f2, 0), (self.stu, 0), (self.adm, 1)):
+            self.client.force_authenticate(who)
+            got = [e for e in self.client.get("/api/events/").data["results"] if e["id"] == d]
+            self.assertEqual(len(got), expect, who.username)
+            self.assertEqual(self.client.get(f"/api/events/{d}/").status_code, 200 if expect else 404, who.username)
+
+    def test_event_targeting_limited_to_assigned_groups_and_sections(self):
+        fa = self.faculty("fa", events=True, groups=[self.ga])
+        self.assertEqual(self.mkevent(fa, target_group=self.ga.id).status_code, 201)
+        self.assertEqual(self.mkevent(fa, target_sections="A2").status_code, 201)
+        self.assertEqual(self.mkevent(fa, target_group=self.gb.id).status_code, 400)
+        self.assertEqual(self.mkevent(fa, target_sections="B1").status_code, 400)
+        self.assertEqual(self.mkevent(fa).status_code, 400)                              # "everyone" not allowed when restricted
+        self.assertEqual(self.mkevent(self.f1).status_code, 201)                         # no assignment = unrestricted
+        self.assertEqual(self.mkevent(self.f1, target_sections="Z9").status_code, 400)   # invalid sections always rejected
+
+    def test_event_validation(self):
+        self.assertEqual(self.mkevent(self.f1, name="").status_code, 400)
+        self.client.force_authenticate(self.f1)
+        self.assertEqual(self.client.post("/api/faculty/events/", {"name": "x"}, format="json").status_code, 400)
+
+    # ---- syllabus ----
+    def put(self, subject, exam, **kw):
+        body = {"content": "Unit 1: Limits\n- Continuity", "verified": True, **kw}
+        return self.client.put(f"/api/faculty/syllabus/{subject.id}/{exam}/", body, format="json")
+
+    def test_syllabus_only_for_assigned_subjects(self):
+        self.client.force_authenticate(self.f1)
+        listing = self.client.get("/api/faculty/syllabus/").data
+        self.assertEqual([x["subject"]["code"] for x in listing], ["MA101"])
+        self.assertEqual(self.put(self.m1, "mid1").status_code, 200)
+        self.assertEqual(self.put(self.m2, "mid1").status_code, 404)                     # another faculty member's subject
+        self.assertEqual(self.put(self.m3, "mid1").status_code, 404)                     # unassigned subject
+        self.assertEqual(self.put(self.m1, "bogus").status_code, 404)
+        self.assertFalse(SyllabusEntry.objects.filter(subject__in=[self.m2, self.m3]).exists())
+
+    def test_syllabus_publish_update_and_unchanged_use_existing_notifications(self):
+        self.client.force_authenticate(self.f1)
+        self.assertEqual(self.put(self.m1, "mid2").status_code, 200)
+        titles = lambda: list(Notification.objects.filter(user=self.stu, kind="syllabus").values_list("title", flat=True))
+        self.assertEqual(len(titles()), 1); self.assertIn("published", titles()[0].lower())
+        self.put(self.m1, "mid2", content="Unit 1: Limits   \n- Continuity")             # whitespace only
+        self.assertEqual(len(titles()), 1)
+        self.put(self.m1, "mid2", content="Unit 1: Limits\n- Continuity\n- Series")
+        self.assertEqual(len(titles()), 2)
+        self.put(self.m1, "end", verified=False)                                          # unverified draft: nobody is told
+        self.assertEqual(len(titles()), 2)
+
+    def test_syllabus_input_validation(self):
+        self.client.force_authenticate(self.f1)
+        self.assertEqual(self.put(self.m1, "mid1", pdf_url="javascript:alert(1)").status_code, 400)
+        self.assertEqual(self.put(self.m1, "mid1", pdf_url="https://college.test/mid1.pdf").status_code, 200)
+        self.assertEqual(self.put(self.m1, "mid1", content="x" * 20001).status_code, 400)
+        self.assertEqual(self.put(self.m1, "mid1", semester=99).status_code, 400)
+        self.assertEqual(self.put(self.m1, "mid1", verified="yes").status_code, 400)
+
+    # ---- profile / groups / activity ----
+    def test_profile_groups_and_activity_are_scoped(self):
+        fa = self.faculty("fa", events=True, groups=[self.ga])
+        self.client.force_authenticate(fa)
+        me = self.client.get("/api/faculty/me/").data
+        self.assertEqual((me["username"], me["scope"]["restricted"]), ("fa", True))
+        groups = self.client.get("/api/faculty/groups/").data
+        self.assertEqual([g["name"] for g in groups["groups"]], ["Group A"])
+        a1 = next(s for s in groups["groups"][0]["sections"] if s["code"] == "A1")
+        self.assertEqual(a1["students"], 1)
+        self.assertNotIn("stu", str(groups))                                              # counts only, never student names
+        self.mkevent(fa, target_group=self.ga.id)
+        self.client.force_authenticate(fa)
+        self.assertEqual(len(self.client.get("/api/faculty/activity/").data), 1)
+        self.client.force_authenticate(self.f2)
+        self.assertEqual(self.client.get("/api/faculty/activity/").data, [])             # nobody else's activity
+
+    def test_logout_means_tokens_are_dropped_client_side_and_refresh_still_needs_active_user(self):
+        self.activate("f1", faculty_codes.issue_code(self.f1, self.adm))
+        t = self.login("/api/auth/faculty/token/", "f1", STRONG).data
+        faculty_codes.revoke(self.f1)
+        self.assertEqual(self.client.post("/api/auth/refresh/", {"refresh": t["refresh"]}, format="json").status_code in (200, 401), True)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {t['access']}")
+        self.assertEqual(self.client.get("/api/faculty/me/").status_code, 401)
