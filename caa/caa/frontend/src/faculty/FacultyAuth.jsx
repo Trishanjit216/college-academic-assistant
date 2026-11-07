@@ -70,6 +70,7 @@ export default function FacultyAuth({ onDone }) {
 
           {err && <div className="form-error" role="alert"><Icon name="alert" size={18} /><span>{err}</span></div>}
           <Button loading={busy}>{activate ? "Activate and log in" : "Log in"}</Button>
+          {!activate && <div className="auth-switch"><Link to="/faculty/forgot-password" className="link-btn">Forgot password?</Link></div>}
           <div className="auth-switch">
             <button type="button" className="link-btn" onClick={() => switchMode(activate ? "login" : "activate")}>
               {activate ? "Already activated? Log in" : "First time, or got a new code? Activate your account"}
