@@ -1,6 +1,6 @@
 // Minimal service worker: makes the app installable and shows a friendly page if you are offline.
 // It never caches API calls or logged-in data.
-const CACHE = "caa-shell-v1";
+const CACHE = "caa-shell-v2";
 const OFFLINE = "/offline.html";
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll([OFFLINE, "/icon-192.png"])));
