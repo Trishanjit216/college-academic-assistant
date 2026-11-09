@@ -27,7 +27,15 @@ export async function api(path, { method = "GET", body, auth = true, blob = fals
   const form = typeof FormData !== "undefined" && body instanceof FormData;   // file uploads: let the browser set the boundary
   const headers = form ? {} : { "Content-Type": "application/json" };
   if (auth && tokens.access()) headers.Authorization = `Bearer ${tokens.access()}`;
-  const res = await fetch(`${BASE}${path}`, { method, headers, body: body ? (form ? body : JSON.stringify(body)) : undefined });
+  // Give up after 60 s so the page shows an error instead of loading forever (free server may be waking up).
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), 60000) : null;
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, { method, headers, signal: ctl?.signal, body: body ? (form ? body : JSON.stringify(body)) : undefined });
+  } catch (e) {
+    throw new Error(e?.name === "AbortError" ? "The server is taking too long (it may be waking up). Please try again in a minute." : "Can't reach the server. Please try again.");
+  } finally { if (timer) clearTimeout(timer); }
   if (res.status === 401 && auth && retry && (await refresh())) return api(path, { method, body, auth, blob }, false);
   if (res.status === 401 && auth) { tokens.clear(); window.dispatchEvent(new Event("caa-logout")); }
   if (res.status === 204) return null;
