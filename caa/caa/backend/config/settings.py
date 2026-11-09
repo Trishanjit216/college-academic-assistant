@@ -56,9 +56,19 @@ TEMPLATES = [{
 # SQLite locally; Postgres when DATABASE_URL is set (Render/Neon/Supabase).
 DATABASES = {
     "default": dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}", conn_max_age=600
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}", conn_max_age=60
     )
 }
+# Free-tier hosts (Supabase pooler / Render) silently drop idle connections. Without a
+# health check, a worker keeps reusing the dead connection and every request fails or
+# hangs until the service is redeployed. These settings make Django test the connection
+# before reuse and give up quickly instead of hanging.
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+if "postgres" in DATABASES["default"].get("ENGINE", ""):
+    DATABASES["default"].setdefault("OPTIONS", {}).update({
+        "connect_timeout": 10,
+        "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3,
+    })
 
 AUTH_USER_MODEL = "core.User"
 AUTH_PASSWORD_VALIDATORS = [
